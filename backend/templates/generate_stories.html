@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generate Stories - JiraGuru</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    header { padding: 16px 24px; background: #1e293b; display: flex; justify-content: space-between; align-items: center; }
+    main { padding: 24px; max-width: 900px; margin: 0 auto; }
+    section { background: #1e293b; padding: 16px; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,0.3); margin-bottom: 16px; }
+    button { padding: 10px 14px; border: none; border-radius: 8px; background: #38bdf8; color: #0f172a; font-weight: 700; cursor: pointer; }
+    select { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #334155; background: #0b162a; color: #e2e8f0; margin-bottom: 12px; }
+    .ticket { padding: 10px; border: 1px solid #334155; border-radius: 8px; margin-bottom: 8px; background: #111827; }
+    .muted { color: #94a3b8; }
+    a { color: #38bdf8; text-decoration: none; }
+    .plan-grid { display: grid; gap: 12px; grid-template-columns: 1fr; }
+    .plan-editor { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #334155; background: #0b162a; color: #e2e8f0; min-height: 240px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>Generate Stories</strong></div>
+    <div>
+      <button onclick="goBack()">Back</button>
+    </div>
+  </header>
+  <main>
+    <section>
+      <h2>Select Project</h2>
+      <select id="project-select">
+        <option disabled selected>Loading projects...</option>
+      </select>
+      <div id="saved-plan" class="muted" style="margin-top:8px;">Loading plan...</div>
+    </section>
+    <section>
+      <h2>Functional Requirements & Plan</h2>
+      <div class="muted">Generate a detailed requirements plan before creating stories.</div>
+      <div class="flex" style="gap:10px; margin:10px 0;">
+        <button id="generate-plan-btn">Generate Plan (AI)</button>
+        <button id="save-plan-btn">Save Plan</button>
+        <span id="plan-status" class="muted"></span>
+      </div>
+      <div class="plan-grid">
+        <textarea id="plan-content" class="plan-editor" placeholder="Requirements / plan will appear here..."></textarea>
+      </div>
+    </section>
+    <section>
+      <h2>Generate Stories</h2>
+      <button id="generate-btn">Approve & Generate Stories</button>
+      <span id="status" class="muted" style="margin-left:10px;"></span>
+    </section>
+    <section>
+      <h2>Epics & Stories</h2>
+      <div id="tickets-container" class="muted">Nothing generated yet.</div>
+    </section>
+  </main>
+
+  <script>
+    const currentUser = localStorage.getItem('currentUser');
+    if (!currentUser) {
+      window.location.href = '/';
+    }
+
+    function goBack() {
+      if (currentUser === 'Vignesh') {
+        window.location.href = '/dashboard/owner';
+      } else {
+        window.location.href = '/dashboard/user';
+      }
+    }
+
+    async function fetchJSON(url, options = {}) {
+      const headers = options.headers || {};
+      headers['X-User'] = currentUser || '';
+      options.headers = headers;
+      const res = await fetch(url, options);
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      return res.json();
+    }
+
+    async function loadProjects() {
+      const select = document.getElementById('project-select');
+      try {
+        const projects = await fetchJSON('/api/projects');
+        if (!projects.length) {
+          select.innerHTML = '<option disabled>No projects available</option>';
+          return;
+        }
+        select.innerHTML = projects.map(p => `<option value="${p.id}">${p.code} — ${p.title}</option>`).join('');
+        loadPlan(); // load plan for first project
+      } catch (err) {
+        select.innerHTML = '<option disabled>Error loading projects</option>';
+      }
+    }
+
+    async function loadPlan() {
+      const projectId = document.getElementById('project-select').value;
+      if (!projectId) return;
+      const planStatus = document.getElementById('plan-status');
+      planStatus.textContent = 'Loading saved plan...';
+      try {
+        const res = await fetch(`/api/projects/${projectId}/requirements/plan`, {
+          headers: { 'X-User': currentUser }
+        });
+        const data = await res.json();
+        document.getElementById('plan-content').value = data.content || '';
+        document.getElementById('saved-plan').textContent = data.updated_at ? `Last updated: ${data.updated_at}` : 'No plan saved yet.';
+        planStatus.textContent = '';
+      } catch (err) {
+        planStatus.textContent = 'Failed to load plan.';
+      }
+    }
+
+    async function generateStories() {
+      const status = document.getElementById('status');
+      const projectId = document.getElementById('project-select').value;
+      if (!projectId) return;
+      status.textContent = 'Generating...';
+      try {
+        const tickets = await fetchJSON(`/api/projects/${projectId}/tickets/generate`, { method: 'POST' });
+        renderTickets(tickets, projectId);
+        status.textContent = 'Generated';
+      } catch (err) {
+        status.textContent = 'Failed to generate (check API key and documents).';
+      }
+    }
+
+    function renderTickets(tickets, projectId) {
+      const container = document.getElementById('tickets-container');
+      if (!tickets.length) {
+        container.innerHTML = '<p class="muted">No tickets.</p>';
+        return;
+      }
+      const epics = tickets.filter(t => t.type === 'EPIC');
+      const stories = tickets.filter(t => t.type === 'STORY');
+      container.innerHTML = `
+        <div>
+          <h3>Epics</h3>
+          ${epics.length ? epics.map(e => `<div class="ticket"><strong>${e.key}</strong> — ${e.title}<br><span class="muted">${e.description}</span><br><a href="/tickets/${projectId}/${e.key}">Open</a></div>`).join('') : '<p class="muted">None</p>'}
+        </div>
+        <div style="margin-top:12px;">
+          <h3>Stories</h3>
+          ${stories.length ? stories.map(s => `<div class="ticket"><strong>${s.key}</strong> — ${s.title}<br><span class="muted">${s.description}</span><br><a href="/tickets/${projectId}/${s.key}">Open</a></div>`).join('') : '<p class="muted">None</p>'}
+        </div>
+      `;
+    }
+
+    document.getElementById('generate-btn').addEventListener('click', generateStories);
+    document.getElementById('project-select').addEventListener('change', loadPlan);
+    document.getElementById('plan-content').addEventListener('input', () => {});
+
+    document.getElementById('generate-plan-btn').addEventListener('click', async () => {
+      const planStatus = document.getElementById('plan-status');
+      const projectId = document.getElementById('project-select').value;
+      if (!projectId) return;
+      planStatus.textContent = 'Generating plan...';
+      try {
+        const res = await fetch(`/api/projects/${projectId}/requirements/plan/generate`, {
+          method: 'POST',
+          headers: { 'X-User': currentUser, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requirements: document.getElementById('plan-content').value }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          planStatus.textContent = err.detail ? `Failed: ${err.detail}` : `Failed to generate plan (${res.status})`;
+          return;
+        }
+        const data = await res.json();
+        document.getElementById('plan-content').value = data.content || '';
+        planStatus.textContent = 'Plan generated.';
+      } catch (err) {
+        planStatus.textContent = 'Failed to generate plan.';
+      }
+    });
+
+    document.getElementById('save-plan-btn').addEventListener('click', async () => {
+      const planStatus = document.getElementById('plan-status');
+      const projectId = document.getElementById('project-select').value;
+      const content = document.getElementById('plan-content').value;
+      if (!projectId) return;
+      planStatus.textContent = 'Saving...';
+      try {
+        await fetch(`/api/projects/${projectId}/requirements/plan`, {
+          method: 'POST',
+          headers: { 'X-User': currentUser, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content }),
+        });
+        planStatus.textContent = 'Plan saved.';
+      } catch (err) {
+        planStatus.textContent = 'Failed to save.';
+      }
+    });
+
+    loadProjects();
+  </script>
+</body>
+</html>

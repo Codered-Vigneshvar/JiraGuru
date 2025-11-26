@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>JiraGuru Login</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+    .card { background: #1e293b; padding: 32px; border-radius: 12px; width: 360px; box-shadow: 0 10px 30px rgba(0,0,0,0.4); }
+    h1 { margin-top: 0; }
+    label { display: block; margin: 12px 0 4px; }
+    input { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #334155; background: #0b162a; color: #e2e8f0; }
+    button { margin-top: 16px; width: 100%; padding: 12px; border: none; border-radius: 8px; background: #38bdf8; color: #0f172a; font-weight: 700; cursor: pointer; }
+    button:hover { background: #0ea5e9; }
+    .error { color: #f87171; margin-top: 10px; min-height: 18px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>JiraGuru</h1>
+    <p>Sign in to continue.</p>
+    <form id="login-form">
+      <label for="username">Username</label>
+      <input id="username" name="username" required />
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required />
+      <button type="submit">Login</button>
+      <div class="error" id="error"></div>
+    </form>
+  </div>
+  <script>
+    const form = document.getElementById('login-form');
+    const errorEl = document.getElementById('error');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errorEl.textContent = '';
+      const payload = {
+        username: document.getElementById('username').value.trim(),
+        password: document.getElementById('password').value.trim(),
+      };
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        errorEl.textContent = data.error || 'Login failed';
+        return;
+      }
+      localStorage.setItem('currentUser', data.user.username);
+      if (data.user.username === 'Vignesh') {
+        window.location.href = '/dashboard/owner';
+      } else {
+        window.location.href = '/dashboard/user';
+      }
+    });
+  </script>
+</body>
+</html>

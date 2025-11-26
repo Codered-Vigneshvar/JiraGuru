@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Project View - JiraGuru</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    header { padding: 16px 24px; background: #1e293b; display: flex; justify-content: space-between; align-items: center; }
+    main { padding: 24px; max-width: 800px; margin: 0 auto; }
+    .card { background: #1e293b; padding: 16px; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,0.3); margin-bottom: 16px; }
+    .muted { color: #94a3b8; }
+    ul { padding-left: 18px; }
+    button { padding: 8px 12px; border: none; border-radius: 6px; background: #38bdf8; color: #0f172a; font-weight: 700; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>Project</strong></div>
+    <div>
+      <button onclick="goBack()">Back</button>
+    </div>
+  </header>
+  <main>
+    <div id="project-container" class="card">
+      Loading project...
+    </div>
+    <div id="tickets-container" class="card"></div>
+    <div id="plan-container" class="card"></div>
+  </main>
+
+  <script>
+    const projectId = "{{ project_id }}";
+    const currentUser = localStorage.getItem('currentUser');
+    if (!currentUser) {
+      window.location.href = '/';
+    }
+
+    function goBack() {
+      if (currentUser === 'Vignesh') {
+        window.location.href = '/dashboard/owner';
+      } else {
+        window.location.href = '/dashboard/user';
+      }
+    }
+
+    async function loadProject() {
+      const res = await fetch(`/api/projects/${projectId}`, {
+        headers: { 'X-User': currentUser }
+      });
+      const container = document.getElementById('project-container');
+      if (!res.ok) {
+        container.innerHTML = '<p class="muted">Unable to load project.</p>';
+        return;
+      }
+      const p = await res.json();
+      container.innerHTML = `
+        <h2>${p.title} (${p.code})</h2>
+        <p class="muted">${p.description}</p>
+        <p><strong>Owner:</strong> ${p.owner_username}</p>
+        <p><strong>Members:</strong> ${p.member_usernames.join(', ') || 'None'}</p>
+        <div class="card">
+          <h3>Documents</h3>
+          ${p.documents.length ? `<ul>${p.documents.map(d => `<li>${d.original_name} <span class="muted">(${d.content_type})</span></li>`).join('')}</ul>` : '<p class="muted">No documents yet.</p>'}
+        </div>
+        <div class="card">
+          <h3>Tickets</h3>
+          ${p.tickets && p.tickets.length ? `<ul id="ticket-list">${p.tickets.map(t => `<li style="margin-bottom:6px;"><a href="/tickets/${projectId}/${t.key}">${t.key} — ${t.title}</a> <button data-key="${t.key}" class="delete-ticket" style="margin-left:6px;">Delete</button></li>`).join('')}</ul><button id="clear-tickets" style="margin-top:8px;">Clear All</button>` : '<p class="muted">No tickets yet.</p>'}
+        </div>
+      `;
+      document.getElementById('tickets-container').innerHTML = '';
+      renderPlan();
+      wireTicketActions();
+    }
+
+    function renderMarkdown(md) {
+      if (!md) return 'No plan saved.';
+      const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return esc(md).replace(/\\n/g, '<br>');
+    }
+
+    function wireTicketActions() {
+      document.querySelectorAll('.delete-ticket').forEach(btn => {
+        btn.addEventListener('click', async (e) => {
+          const key = e.target.getAttribute('data-key');
+          if (!confirm(`Delete ticket ${key}?`)) return;
+          await fetch(`/api/projects/${projectId}/tickets/${key}`, {
+            method: 'DELETE',
+            headers: { 'X-User': currentUser }
+          });
+          loadProject();
+        });
+      });
+      const clearBtn = document.getElementById('clear-tickets');
+      if (clearBtn) {
+        clearBtn.addEventListener('click', async () => {
+          if (!confirm('Delete all tickets?')) return;
+          await fetch(`/api/projects/${projectId}/tickets`, {
+            method: 'DELETE',
+            headers: { 'X-User': currentUser }
+          });
+          loadProject();
+        });
+      }
+    }
+
+    async function renderPlan() {
+      const planRes = await fetch(`/api/projects/${projectId}/requirements/plan`, {
+        headers: { 'X-User': currentUser }
+      });
+      const planData = await planRes.json();
+      document.getElementById('plan-container').innerHTML = `
+        <h3>Requirements Plan</h3>
+        <p class="muted">${planData.updated_at ? 'Last updated: ' + planData.updated_at : 'Not saved yet.'}</p>
+        <div>${renderMarkdown(planData.content || '')}</div>
+      `;
+    }
+
+    loadProject();
+  </script>
+</body>
+</html>

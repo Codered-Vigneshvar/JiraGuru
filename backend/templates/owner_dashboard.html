@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Owner Dashboard - JiraGuru</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    header { padding: 16px 24px; background: #1e293b; display: flex; justify-content: space-between; align-items: center; }
+    main { padding: 24px; display: grid; gap: 20px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+    section { background: #1e293b; padding: 16px; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,0.3); }
+    h2 { margin-top: 0; }
+    label { display: block; margin: 10px 0 4px; }
+    input, textarea { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #334155; background: #0b162a; color: #e2e8f0; }
+    button { margin-top: 12px; padding: 10px 14px; border: none; border-radius: 8px; background: #38bdf8; color: #0f172a; font-weight: 700; cursor: pointer; }
+    button:hover { background: #0ea5e9; }
+    .list-item { padding: 10px; border: 1px solid #334155; border-radius: 8px; margin-bottom: 8px; background: #111827; }
+    .muted { color: #94a3b8; }
+    a { color: #38bdf8; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <strong>Owner Dashboard</strong>
+    </div>
+    <div>
+      <button onclick="window.location.href='/stories/generate'">Generate Stories</button>
+      <button onclick="logout()">Logout</button>
+    </div>
+  </header>
+  <main>
+    <section>
+      <h2>Create User</h2>
+      <form id="user-form">
+        <label for="new-username">Username</label>
+        <input id="new-username" required />
+        <label for="new-password">Password</label>
+        <input id="new-password" type="password" required />
+        <button type="submit">Create User</button>
+      </form>
+      <div id="user-form-status" class="muted"></div>
+    </section>
+
+    <section>
+      <h2>Create Project</h2>
+      <form id="project-form">
+        <label for="code">Code</label>
+        <input id="code" required />
+        <label for="title">Title</label>
+        <input id="title" required />
+        <label for="description">Description</label>
+        <textarea id="description" rows="3" required></textarea>
+        <label for="member-select">Members</label>
+        <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+          <select id="member-select" size="6" style="flex:1; padding:10px; border-radius:6px; border:1px solid #334155; background:#0b162a; color:#e2e8f0;">
+            <option disabled>Loading users...</option>
+          </select>
+          <button type="button" id="add-member-btn" style="height:38px;">Add</button>
+        </div>
+        <div class="muted" style="margin-bottom:8px;">Selected members:</div>
+        <div id="selected-members" class="list-item" style="background:#0b162a;">Loading...</div>
+        <label for="project-file">Attach document (optional)</label>
+        <input id="project-file" type="file" />
+        <button type="submit">Create Project</button>
+      </form>
+      <div id="project-form-status" class="muted"></div>
+    </section>
+
+    <section>
+      <h2>Users</h2>
+      <div id="users-list"></div>
+    </section>
+
+    <section>
+      <h2>Projects</h2>
+      <div id="projects-list"></div>
+    </section>
+  </main>
+
+  <script>
+    const currentUser = localStorage.getItem('currentUser');
+    if (currentUser !== 'Vignesh') {
+      window.location.href = '/';
+    }
+
+    function logout() {
+      localStorage.removeItem('currentUser');
+      window.location.href = '/';
+    }
+
+    async function fetchJSON(url, options = {}) {
+      const headers = options.headers || {};
+      headers['X-User'] = localStorage.getItem('currentUser') || '';
+      options.headers = headers;
+      const res = await fetch(url, options);
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      return res.json();
+    }
+
+    // Users
+    let selectedMembers = ['Vignesh'];
+
+    function renderSelectedMembers() {
+      const container = document.getElementById('selected-members');
+      if (!selectedMembers.length) {
+        container.textContent = 'None';
+        return;
+      }
+      container.textContent = selectedMembers.join(', ');
+    }
+
+    async function loadUsers() {
+      try {
+        const data = await fetchJSON('/api/users');
+        const container = document.getElementById('users-list');
+        const memberSelect = document.getElementById('member-select');
+        if (!data.length) {
+          container.innerHTML = '<p class="muted">No users yet.</p>';
+          memberSelect.innerHTML = '<option disabled>No users to add</option>';
+          return;
+        }
+        container.innerHTML = data.map(u => `
+          <div class="list-item">
+            <strong>${u.username}</strong> ${u.is_owner ? '(Owner)' : ''}
+          </div>
+        `).join('');
+        memberSelect.innerHTML = data.map(u => `
+          <option value="${u.username}">${u.username}${u.is_owner ? ' (Owner)' : ''}</option>
+        `).join('');
+        renderSelectedMembers();
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    document.getElementById('user-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const statusEl = document.getElementById('user-form-status');
+      statusEl.textContent = '';
+      const payload = {
+        username: document.getElementById('new-username').value.trim(),
+        password: document.getElementById('new-password').value.trim(),
+      };
+      try {
+        await fetchJSON('/api/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        statusEl.textContent = 'User created.';
+        e.target.reset();
+        loadUsers();
+      } catch (err) {
+        statusEl.textContent = 'Failed to create user (username may exist).';
+      }
+    });
+
+    // Projects
+    async function loadProjects() {
+      try {
+        const data = await fetchJSON('/api/projects');
+        const container = document.getElementById('projects-list');
+        if (!data.length) {
+          container.innerHTML = '<p class="muted">No projects yet.</p>';
+          return;
+        }
+        container.innerHTML = data.map(p => `
+          <div class="list-item">
+            <div><strong>${p.code}</strong> — ${p.title}</div>
+            <div class="muted">${p.description}</div>
+            <div class="muted">Members: ${p.member_usernames.length}</div>
+            <a href="/projects/${p.id}/view">View Project</a>
+            <button class="delete-project" data-id="${p.id}" style="margin-left:8px;">Delete</button>
+          </div>
+        `).join('');
+        document.querySelectorAll('.delete-project').forEach(btn => {
+          btn.addEventListener('click', async (e) => {
+            const id = e.target.getAttribute('data-id');
+            if (!confirm('Delete project and all its data?')) return;
+            try {
+              await fetchJSON(`/api/projects/${id}`, { method: 'DELETE' });
+              loadProjects();
+            } catch (err) {
+              alert('Failed to delete project.');
+            }
+          });
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    async function uploadDocument(projectId, file) {
+      const formData = new FormData();
+      formData.append('file', file);
+      await fetch(`/api/projects/${projectId}/documents`, {
+        method: 'POST',
+        headers: { 'X-User': localStorage.getItem('currentUser') || '' },
+        body: formData,
+      });
+    }
+
+    document.getElementById('project-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const statusEl = document.getElementById('project-form-status');
+      statusEl.textContent = '';
+      const members = Array.from(new Set(selectedMembers));
+      const payload = {
+        code: document.getElementById('code').value.trim(),
+        title: document.getElementById('title').value.trim(),
+        description: document.getElementById('description').value.trim(),
+        member_usernames: members,
+      };
+      try {
+        const project = await fetchJSON('/api/projects', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const fileInput = document.getElementById('project-file');
+        if (fileInput.files.length) {
+          await uploadDocument(project.id, fileInput.files[0]);
+        }
+        statusEl.textContent = 'Project created.';
+        e.target.reset();
+        selectedMembers = ['Vignesh'];
+        renderSelectedMembers();
+        loadProjects();
+      } catch (err) {
+        statusEl.textContent = 'Failed to create project.';
+      }
+    });
+
+    document.getElementById('add-member-btn').addEventListener('click', () => {
+      const select = document.getElementById('member-select');
+      const choice = select.value;
+      if (!choice) return;
+      if (!selectedMembers.includes(choice)) {
+        selectedMembers.push(choice);
+        renderSelectedMembers();
+      }
+    });
+
+    loadUsers();
+    loadProjects();
+  </script>
+</body>
+</html>

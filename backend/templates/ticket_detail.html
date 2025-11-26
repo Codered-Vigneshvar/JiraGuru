@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ticket Detail - JiraGuru</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    header { padding: 16px 24px; background: #1e293b; display: flex; justify-content: space-between; align-items: center; }
+    main { padding: 24px; max-width: 900px; margin: 0 auto; }
+    .card { background: #1e293b; padding: 16px; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,0.3); margin-bottom: 16px; }
+    label { display: block; margin: 8px 0 4px; }
+    input, textarea, select { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #334155; background: #0b162a; color: #e2e8f0; }
+    button { padding: 10px 14px; border: none; border-radius: 8px; background: #38bdf8; color: #0f172a; font-weight: 700; cursor: pointer; }
+    .muted { color: #94a3b8; }
+    .comment { border: 1px solid #334155; border-radius: 8px; padding: 8px; margin-bottom: 8px; background: #111827; }
+    .doc-list { list-style: none; padding-left: 0; }
+    .doc-list li { margin-bottom: 6px; }
+    .flex { display: flex; gap: 10px; align-items: center; }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>Ticket</strong></div>
+    <div><button onclick="goBack()">Back</button></div>
+  </header>
+  <main>
+    <div id="ticket-card" class="card">Loading ticket...</div>
+
+    <div class="card">
+      <h3>Update Ticket</h3>
+      <form id="ticket-form">
+        <label for="title">Title</label>
+        <input id="title" required />
+        <label for="description">Description</label>
+        <textarea id="description" rows="3"></textarea>
+        <label for="status">Status</label>
+        <select id="status">
+          <option value="TODO">TODO</option>
+          <option value="IN_PROGRESS">IN_PROGRESS</option>
+          <option value="DONE">DONE</option>
+        </select>
+        <label for="assignee">Assignee Username</label>
+        <select id="assignee">
+          <option value="">Unassigned</option>
+        </select>
+        <label for="blockers">Blockers</label>
+        <textarea id="blockers" rows="2"></textarea>
+        <label for="acceptance-criteria">Acceptance Criteria (one per line)</label>
+        <textarea id="acceptance-criteria" rows="3"></textarea>
+        <button type="submit">Save</button>
+        <span id="save-status" class="muted"></span>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>Comments</h3>
+      <div id="comments"></div>
+      <form id="comment-form" style="margin-top:10px;">
+        <textarea id="comment-text" rows="2" placeholder="Add a comment" required></textarea>
+        <button type="submit">Post Comment</button>
+      </form>
+    </div>
+
+    <div class="card">
+      <h3>Attach Document</h3>
+      <form id="doc-form">
+        <input type="file" id="doc-file" required />
+        <button type="submit">Upload</button>
+        <span id="doc-status" class="muted"></span>
+      </form>
+    </div>
+  </main>
+
+  <script>
+    const projectId = "{{ project_id }}";
+    const ticketKey = "{{ ticket_key }}";
+    const currentUser = localStorage.getItem('currentUser');
+    if (!currentUser) {
+      window.location.href = '/';
+    }
+
+    function goBack() {
+      window.history.back();
+    }
+
+    async function fetchJSON(url, options = {}) {
+      const headers = options.headers || {};
+      headers['X-User'] = currentUser || '';
+      options.headers = headers;
+      const res = await fetch(url, options);
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      return res.json();
+    }
+
+    async function loadTicket() {
+      try {
+        const t = await fetchJSON(`/api/projects/${projectId}/tickets/${ticketKey}`);
+        renderTicket(t);
+        populateForm(t);
+      } catch (err) {
+        document.getElementById('ticket-card').textContent = 'Unable to load ticket.';
+      }
+    }
+
+    function renderTicket(t) {
+      const card = document.getElementById('ticket-card');
+      card.innerHTML = `
+        <h2>${t.key} — ${t.title}</h2>
+        <p class="muted">${t.description}</p>
+        <p>Status: ${t.status}</p>
+        <p>Type: ${t.type}</p>
+        <p>Assignee: ${t.assignee_username || 'Unassigned'}</p>
+        <p>Epic: ${t.epic_key || '-'}</p>
+        <div>
+          <h4>Acceptance Criteria</h4>
+          ${t.acceptance_criteria && t.acceptance_criteria.length ? `<ul>${t.acceptance_criteria.map(a => `<li>${a}</li>`).join('')}</ul>` : '<p class="muted">None</p>'}
+        </div>
+        <div>
+          <h4>Linked Documents</h4>
+          ${t.linked_document_ids.length ? `<ul class="doc-list">${t.linked_document_ids.map(id => `<li>${id}</li>`).join('')}</ul>` : '<p class="muted">None</p>'}
+        </div>
+      `;
+    }
+
+    function populateForm(t) {
+      document.getElementById('title').value = t.title;
+      document.getElementById('description').value = t.description;
+      document.getElementById('status').value = t.status;
+      document.getElementById('assignee').value = t.assignee_username || '';
+      document.getElementById('blockers').value = t.blockers || '';
+      document.getElementById('acceptance-criteria').value = (t.acceptance_criteria || []).join('\\n');
+    }
+
+    document.getElementById('ticket-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const statusEl = document.getElementById('save-status');
+      statusEl.textContent = 'Saving...';
+      const payload = {
+        title: document.getElementById('title').value,
+        description: document.getElementById('description').value,
+        status: document.getElementById('status').value,
+        assignee_username: document.getElementById('assignee').value || null,
+        blockers: document.getElementById('blockers').value || null,
+        acceptance_criteria: document.getElementById('acceptance-criteria').value
+          .split('\\n')
+          .map(x => x.trim())
+          .filter(Boolean),
+      };
+      try {
+        const updated = await fetchJSON(`/api/projects/${projectId}/tickets/${ticketKey}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        renderTicket(updated);
+        statusEl.textContent = 'Saved.';
+      } catch (err) {
+        statusEl.textContent = 'Failed to save.';
+      }
+    });
+
+    async function loadComments() {
+      try {
+        const comments = await fetchJSON(`/api/projects/${projectId}/tickets/${ticketKey}/comments`);
+        const container = document.getElementById('comments');
+        if (!comments.length) {
+          container.innerHTML = '<p class="muted">No comments yet.</p>';
+          return;
+        }
+        container.innerHTML = comments.map(c => `
+          <div class="comment">
+            <div><strong>${c.author_username}</strong> — <span class="muted">${new Date(c.created_at).toLocaleString()}</span></div>
+            <div>${c.text}</div>
+          </div>
+        `).join('');
+      } catch (err) {
+        document.getElementById('comments').innerHTML = '<p class="muted">Unable to load comments.</p>';
+      }
+    }
+
+    document.getElementById('comment-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const text = document.getElementById('comment-text').value.trim();
+      if (!text) return;
+      try {
+        await fetchJSON(`/api/projects/${projectId}/tickets/${ticketKey}/comments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        document.getElementById('comment-text').value = '';
+        loadComments();
+      } catch (err) {
+        alert('Failed to post comment.');
+      }
+    });
+
+    document.getElementById('doc-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const fileInput = document.getElementById('doc-file');
+      const statusEl = document.getElementById('doc-status');
+      if (!fileInput.files.length) return;
+      statusEl.textContent = 'Uploading...';
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      try {
+        const ticket = await fetch(`/api/projects/${projectId}/tickets/${ticketKey}/documents`, {
+          method: 'POST',
+          headers: { 'X-User': currentUser },
+          body: formData,
+        }).then(r => r.json());
+        renderTicket(ticket);
+        statusEl.textContent = 'Uploaded.';
+        fileInput.value = '';
+      } catch (err) {
+        statusEl.textContent = 'Upload failed.';
+      }
+    });
+
+    loadTicket();
+    loadComments();
+    // Load users for assignee select
+    fetch('/api/users', { headers: { 'X-User': currentUser } })
+      .then(r => r.json())
+      .then(users => {
+        const select = document.getElementById('assignee');
+        select.innerHTML = '<option value=\"\">Unassigned</option>' + users.map(u => `<option value=\"${u.username}\">${u.username}${u.is_owner ? ' (Owner)' : ''}</option>`).join('');
+      })
+      .catch(() => {});
+  </script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>User Dashboard - JiraGuru</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    header { padding: 16px 24px; background: #1e293b; display: flex; justify-content: space-between; align-items: center; }
+    main { padding: 24px; }
+    .list-item { padding: 12px; border: 1px solid #334155; border-radius: 8px; margin-bottom: 10px; background: #111827; }
+    .muted { color: #94a3b8; }
+    a { color: #38bdf8; text-decoration: none; }
+    button { padding: 8px 12px; border: none; border-radius: 6px; background: #38bdf8; color: #0f172a; font-weight: 700; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>User Dashboard</strong></div>
+    <div>
+      <button onclick="logout()">Logout</button>
+    </div>
+  </header>
+  <main>
+    <h2>Your Projects</h2>
+    <div id="projects-list"></div>
+  </main>
+
+  <script>
+    const currentUser = localStorage.getItem('currentUser');
+    if (!currentUser) {
+      window.location.href = '/';
+    } else if (currentUser === 'Vignesh') {
+      window.location.href = '/dashboard/owner';
+    }
+
+    function logout() {
+      localStorage.removeItem('currentUser');
+      window.location.href = '/';
+    }
+
+    async function loadProjects() {
+      const res = await fetch('/api/projects', {
+        headers: { 'X-User': currentUser }
+      });
+      if (!res.ok) {
+        document.getElementById('projects-list').innerHTML = '<p class="muted">Unable to load projects.</p>';
+        return;
+      }
+      const data = await res.json();
+      const container = document.getElementById('projects-list');
+      if (!data.length) {
+        container.innerHTML = '<p class="muted">No projects assigned.</p>';
+        return;
+      }
+      container.innerHTML = data.map(p => `
+        <div class="list-item">
+          <div><strong>${p.code}</strong> — ${p.title}</div>
+          <div class="muted">${p.description}</div>
+          <div class="muted">Members: ${p.member_usernames.join(', ') || 'None'}</div>
+          <a href="/projects/${p.id}/view">View Project</a>
+        </div>
+      `).join('');
+    }
+
+    loadProjects();
+  </script>
+</body>
+</html>

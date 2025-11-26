@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+pydantic-settings
+pypdf
+python-docx
+langgraph
+langchain-core
+google-generativeai
+python-pptx
+jinja2

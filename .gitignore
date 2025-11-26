@@ -1,0 +1,22 @@
+# Virtual environments
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# OS files
+.DS_Store
+
+# Env files
+.env
+
+# Data and generated artifacts
+backend/data/
+!backend/data/.gitkeep
+
+# IDE/editor
+.vscode/
+.idea/
