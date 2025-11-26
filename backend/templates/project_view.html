@@ -7,11 +7,29 @@
   <style>
     body { font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
     header { padding: 16px 24px; background: #1e293b; display: flex; justify-content: space-between; align-items: center; }
-    main { padding: 24px; max-width: 800px; margin: 0 auto; }
-    .card { background: #1e293b; padding: 16px; border-radius: 10px; box-shadow: 0 6px 24px rgba(0,0,0,0.3); margin-bottom: 16px; }
+    main { padding: 24px; max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+    .card { background: #1e293b; padding: 16px; border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,0.3); }
     .muted { color: #94a3b8; }
     ul { padding-left: 18px; }
     button { padding: 8px 12px; border: none; border-radius: 6px; background: #38bdf8; color: #0f172a; font-weight: 700; cursor: pointer; }
+    .ghost-btn { background: transparent; color: #e2e8f0; border: 1px solid #334155; }
+    .ghost-btn:hover { border-color: #38bdf8; }
+    .section-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+    .ticket-section { margin-top: 12px; }
+    .ticket-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+    .ticket-card { background: #111827; border: 1px solid #334155; border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; cursor: pointer; transition: transform 120ms ease, border-color 120ms ease; }
+    .ticket-card:hover { transform: translateY(-2px); border-color: #38bdf8; }
+    .ticket-card h4 { margin: 0; }
+    .ticket-meta { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .pill { display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: 0.3px; }
+    .pill.status-todo { background: #1f2937; color: #e5e7eb; }
+    .pill.status-in_progress { background: #0ea5e9; color: #0b1725; }
+    .pill.status-done { background: #10b981; color: #052e16; }
+    .pill.type-epic { background: #f97316; color: #0f172a; }
+    .pill.type-story { background: #a3e635; color: #0f172a; }
+    .ticket-footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .delete-ticket { font-size: 12px; padding: 6px 8px; }
+    .ticket-key { font-weight: 700; letter-spacing: 0.5px; }
   </style>
 </head>
 <body>
@@ -19,6 +37,7 @@
     <div><strong>Project</strong></div>
     <div>
       <button onclick="goBack()">Back</button>
+      <a href="/projects/{{ project_id }}/board"><button type="button">Open Board</button></a>
     </div>
   </header>
   <main>
@@ -32,6 +51,7 @@
   <script>
     const projectId = "{{ project_id }}";
     const currentUser = localStorage.getItem('currentUser');
+    let projectTickets = [];
     if (!currentUser) {
       window.location.href = '/';
     }
@@ -54,6 +74,7 @@
         return;
       }
       const p = await res.json();
+      projectTickets = p.tickets || [];
       container.innerHTML = `
         <h2>${p.title} (${p.code})</h2>
         <p class="muted">${p.description}</p>
@@ -63,14 +84,9 @@
           <h3>Documents</h3>
           ${p.documents.length ? `<ul>${p.documents.map(d => `<li>${d.original_name} <span class="muted">(${d.content_type})</span></li>`).join('')}</ul>` : '<p class="muted">No documents yet.</p>'}
         </div>
-        <div class="card">
-          <h3>Tickets</h3>
-          ${p.tickets && p.tickets.length ? `<ul id="ticket-list">${p.tickets.map(t => `<li style="margin-bottom:6px;"><a href="/tickets/${projectId}/${t.key}">${t.key} — ${t.title}</a> <button data-key="${t.key}" class="delete-ticket" style="margin-left:6px;">Delete</button></li>`).join('')}</ul><button id="clear-tickets" style="margin-top:8px;">Clear All</button>` : '<p class="muted">No tickets yet.</p>'}
-        </div>
       `;
-      document.getElementById('tickets-container').innerHTML = '';
+      renderTickets();
       renderPlan();
-      wireTicketActions();
     }
 
     function renderMarkdown(md) {
@@ -79,28 +95,90 @@
       return esc(md).replace(/\\n/g, '<br>');
     }
 
+    function renderTickets() {
+      const container = document.getElementById('tickets-container');
+      const tickets = projectTickets || [];
+      const epics = tickets.filter(t => t.type === 'EPIC');
+      const stories = tickets.filter(t => t.type === 'STORY');
+
+      const renderTicketCard = (t) => {
+        const statusClass = (t.status || 'TODO').toLowerCase();
+        const typeClass = (t.type || 'STORY').toLowerCase();
+        return `
+          <div class="ticket-card" data-key="${t.key}">
+            <div class="ticket-meta">
+              <span class="pill type-${typeClass}">${t.type === 'EPIC' ? 'Epic' : 'Story'}</span>
+              <span class="pill status-${statusClass}">${t.status}</span>
+            </div>
+            <div class="ticket-key">${t.key}</div>
+            <div class="ticket-title">${t.title}</div>
+            <div class="muted">${t.description || ''}</div>
+            <div class="ticket-footer">
+              <span class="muted">${t.assignee_username ? 'Assignee: ' + t.assignee_username : 'Unassigned'}</span>
+              <button class="delete-ticket ghost-btn" data-key="${t.key}">Delete</button>
+            </div>
+          </div>
+        `;
+      };
+
+      const renderSection = (label, list) => `
+        <div class="ticket-section">
+          <div class="section-header">
+            <h4>${label}</h4>
+            <span class="muted">${list.length} ${label.toLowerCase()}</span>
+          </div>
+          ${list.length ? `<div class="ticket-grid">${list.map(renderTicketCard).join('')}</div>` : '<p class="muted">None yet.</p>'}
+        </div>
+      `;
+
+      container.innerHTML = `
+        <div class="section-header">
+          <div>
+            <h3>Epics & User Stories</h3>
+            <p class="muted">Click a card to open the detail page for editing, assigning, comments, and documents.</p>
+          </div>
+          ${tickets.length ? '<button id="clear-tickets" class="ghost-btn">Clear All</button>' : ''}
+        </div>
+        ${renderSection('Epics', epics)}
+        ${renderSection('User Stories', stories)}
+      `;
+
+      wireTicketActions();
+    }
+
     function wireTicketActions() {
-      document.querySelectorAll('.delete-ticket').forEach(btn => {
-        btn.addEventListener('click', async (e) => {
-          const key = e.target.getAttribute('data-key');
+      const container = document.getElementById('tickets-container');
+      container.onclick = async (event) => {
+        const deleteBtn = event.target.closest('.delete-ticket');
+        if (deleteBtn) {
+          event.stopPropagation();
+          const key = deleteBtn.getAttribute('data-key');
           if (!confirm(`Delete ticket ${key}?`)) return;
           await fetch(`/api/projects/${projectId}/tickets/${key}`, {
             method: 'DELETE',
             headers: { 'X-User': currentUser }
           });
           loadProject();
-        });
-      });
+          return;
+        }
+        const card = event.target.closest('.ticket-card');
+        if (card) {
+          const key = card.getAttribute('data-key');
+          window.location.href = `/tickets/${projectId}/${key}`;
+        }
+      };
+
       const clearBtn = document.getElementById('clear-tickets');
       if (clearBtn) {
-        clearBtn.addEventListener('click', async () => {
+        clearBtn.onclick = async (e) => {
+          e.stopPropagation();
           if (!confirm('Delete all tickets?')) return;
           await fetch(`/api/projects/${projectId}/tickets`, {
             method: 'DELETE',
             headers: { 'X-User': currentUser }
           });
           loadProject();
-        });
+        };
       }
     }
 

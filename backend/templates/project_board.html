@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Project Board - JiraGuru</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; background: #0f172a; color: #e2e8f0; }
+    header { padding: 16px 24px; background: #1e293b; display: flex; justify-content: space-between; align-items: center; }
+    main { padding: 24px; }
+    button { padding: 8px 12px; border: none; border-radius: 6px; background: #38bdf8; color: #0f172a; font-weight: 700; cursor: pointer; }
+    #board-container { display: flex; gap: 16px; }
+    .column { flex: 1; border: 1px solid #334155; border-radius: 10px; padding: 12px; background: #111827; min-height: 320px; }
+    .column h2 { margin-top: 0; text-align: center; }
+    .column-body { min-height: 260px; background: #0b162a; border: 1px dashed #334155; border-radius: 8px; padding: 8px; }
+    .ticket-card { border: 1px solid #334155; margin-bottom: 8px; padding: 10px; background: #1e293b; border-radius: 8px; cursor: grab; }
+    .ticket-card:active { cursor: grabbing; }
+    .ticket-key { font-weight: 700; margin-bottom: 4px; color: #38bdf8; }
+    .ticket-title { font-weight: 600; }
+    .ticket-assignee { font-size: 12px; color: #94a3b8; }
+    .status { min-height: 20px; margin-bottom: 12px; }
+    .status.error { color: #f87171; }
+    .status.success { color: #34d399; }
+  </style>
+</head>
+<body>
+  <header>
+    <div><strong>Project Board</strong></div>
+    <div>
+      <button onclick="goBack()">Back</button>
+    </div>
+  </header>
+  <main>
+    <div id="board-status" class="status muted"></div>
+    <div id="board-container">
+      <div class="column" id="column-todo">
+        <h2>TODO</h2>
+        <div class="column-body" id="column-todo-body"></div>
+      </div>
+      <div class="column" id="column-in-progress">
+        <h2>IN PROGRESS</h2>
+        <div class="column-body" id="column-in-progress-body"></div>
+      </div>
+      <div class="column" id="column-done">
+        <h2>DONE</h2>
+        <div class="column-body" id="column-done-body"></div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const projectId = "{{ project_id }}";
+    const currentUser = localStorage.getItem("currentUser");
+    const statusEl = document.getElementById("board-status");
+    let isUpdating = false;
+    if (!currentUser) {
+      window.location.href = "/";
+    }
+
+    function setStatus(msg, type = "info") {
+      statusEl.textContent = msg || "";
+      statusEl.className = "status " + (type === "error" ? "error" : type === "success" ? "success" : "muted");
+    }
+
+    function goBack() {
+      window.history.back();
+    }
+
+    async function loadBoard() {
+      const user = localStorage.getItem("currentUser");
+      if (!user) {
+        window.location.href = "/";
+        return;
+      }
+      const res = await fetch(`/api/projects/${projectId}/board`, {
+        headers: { "X-User": user }
+      });
+      if (!res.ok) {
+        console.error("Failed to load board", res.status, await res.text());
+        alert("Failed to load board");
+        return;
+      }
+      const data = await res.json();
+
+      document.getElementById("column-todo-body").innerHTML = "";
+      document.getElementById("column-in-progress-body").innerHTML = "";
+      document.getElementById("column-done-body").innerHTML = "";
+
+      function createCard(ticket) {
+        const card = document.createElement("div");
+        card.className = "ticket-card";
+        card.draggable = true;
+        card.dataset.ticketKey = ticket.key;
+        card.innerHTML = `
+          <div class="ticket-key">${ticket.key}</div>
+          <div class="ticket-title">${ticket.title}</div>
+          <div class="ticket-assignee">${ticket.assignee_username || "Unassigned"}</div>
+        `;
+        card.addEventListener("dragstart", (e) => {
+          e.dataTransfer.setData("text/plain", ticket.key);
+        });
+        return card;
+      }
+
+      (data.columns.TODO || []).forEach(t => {
+        document.getElementById("column-todo-body").appendChild(createCard(t));
+      });
+      (data.columns.IN_PROGRESS || []).forEach(t => {
+        document.getElementById("column-in-progress-body").appendChild(createCard(t));
+      });
+      (data.columns.DONE || []).forEach(t => {
+        document.getElementById("column-done-body").appendChild(createCard(t));
+      });
+
+      setupDropZones();
+    }
+
+    function setupDropZones() {
+      const zones = [
+        { el: document.getElementById("column-todo-body"), status: "TODO" },
+        { el: document.getElementById("column-in-progress-body"), status: "IN_PROGRESS" },
+        { el: document.getElementById("column-done-body"), status: "DONE" }
+      ];
+
+      zones.forEach(zone => {
+        zone.el.addEventListener("dragover", (e) => {
+          e.preventDefault();
+        });
+        zone.el.addEventListener("drop", (e) => {
+          e.preventDefault();
+          const ticketKey = e.dataTransfer.getData("text/plain");
+          if (!ticketKey) return;
+          updateTicketStatus(ticketKey, zone.status);
+        });
+      });
+    }
+
+    async function updateTicketStatus(ticketKey, newStatus) {
+      if (isUpdating) return;
+      isUpdating = true;
+      setStatus("Updating ticket...", "info");
+      const user = localStorage.getItem("currentUser");
+      if (!user) {
+        window.location.href = "/";
+        return;
+      }
+      try {
+        const res = await fetch(`/api/projects/${projectId}/tickets/${ticketKey}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            "X-User": user
+          },
+          body: JSON.stringify({ status: newStatus })
+        });
+        if (!res.ok) {
+          const msg = await res.text();
+          console.error("Failed to update ticket status", res.status, msg);
+          setStatus(`Failed to update ticket status (${res.status}). ${msg || ""}`, "error");
+          return;
+        }
+        setStatus("Updated.", "success");
+        await loadBoard();
+      } catch (err) {
+        console.error("Network error while updating ticket", err);
+        setStatus("Network error while updating ticket.", "error");
+      } finally {
+        isUpdating = false;
+      }
+    }
+
+    window.onload = loadBoard;
+  </script>
+</body>
+</html>

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import tempfile
 from pathlib import Path
 from datetime import datetime
+from threading import Lock
 from typing import Any, Dict, List
 
 from .config import settings
@@ -34,12 +37,20 @@ def save_json(path: Path | str, data: Any) -> None:
     """Persist data as JSON, creating parent directories as needed."""
     path_obj = Path(path)
     ensure_dirs(path_obj.parent)
-    with path_obj.open("w", encoding="utf-8") as fp:
-        json.dump(data, fp, indent=2, ensure_ascii=False, default=str)
+    fd, tmp_path_str = tempfile.mkstemp(dir=path_obj.parent, prefix=path_obj.name, suffix=".tmp")
+    tmp_path = Path(tmp_path_str)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fp:
+            json.dump(data, fp, indent=2, ensure_ascii=False, default=str)
+        os.replace(tmp_path, path_obj)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
 
 # User storage helpers -----------------------------------------------------
 USERS_FILE = settings.data_dir / "users.json"
+PROJECTS_LOCK = Lock()
 
 
 def ensure_default_user() -> None:
@@ -131,9 +142,12 @@ def get_project_by_id(project_id: str) -> Dict[str, Any]:
 
 def save_project(updated_project: Dict[str, Any]) -> None:
     """Persist a single project back into projects.json."""
+    target_id = str(updated_project.get("id") or "")
+    if not target_id:
+        raise FileNotFoundError("Project not found.")
     projects = load_projects()
     for idx, project in enumerate(projects):
-        if project.get("id") == updated_project.get("id"):
+        if str(project.get("id")) == target_id:
             projects[idx] = updated_project
             save_projects(projects)
             return

@@ -5,11 +5,14 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Base path of the backend package (backend/app/.. -> backend/)
+BASE_DIR = Path(__file__).resolve().parent.parent
 
 class Settings(BaseSettings):
     """Base settings loaded from environment or .env file."""
 
-    data_dir: Path = Path("data")
+    # Default data dir anchored to the backend folder to avoid CWD issues.
+    data_dir: Path = BASE_DIR / "data"
     gemini_api_key: str | None = None
     gemini_model: str | None = "models/gemini-2.5-flash"
 

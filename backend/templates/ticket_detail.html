@@ -44,8 +44,8 @@
         <select id="assignee">
           <option value="">Unassigned</option>
         </select>
-        <label for="blockers">Blockers</label>
-        <textarea id="blockers" rows="2"></textarea>
+        <label for="dependencies-select">Dependencies</label>
+        <select id="dependencies-select" multiple size="6"></select>
         <label for="acceptance-criteria">Acceptance Criteria (one per line)</label>
         <textarea id="acceptance-criteria" rows="3"></textarea>
         <button type="submit">Save</button>
@@ -76,6 +76,7 @@
     const projectId = "{{ project_id }}";
     const ticketKey = "{{ ticket_key }}";
     const currentUser = localStorage.getItem('currentUser');
+    let allProjectTickets = [];
     if (!currentUser) {
       window.location.href = '/';
     }
@@ -95,9 +96,14 @@
 
     async function loadTicket() {
       try {
-        const t = await fetchJSON(`/api/projects/${projectId}/tickets/${ticketKey}`);
+        const [t, project] = await Promise.all([
+          fetchJSON(`/api/projects/${projectId}/tickets/${ticketKey}`),
+          fetchJSON(`/api/projects/${projectId}`),
+        ]);
+        allProjectTickets = project.tickets || [];
         renderTicket(t);
         populateForm(t);
+        populateDependencies(t, allProjectTickets);
       } catch (err) {
         document.getElementById('ticket-card').textContent = 'Unable to load ticket.';
       }
@@ -112,6 +118,14 @@
         <p>Type: ${t.type}</p>
         <p>Assignee: ${t.assignee_username || 'Unassigned'}</p>
         <p>Epic: ${t.epic_key || '-'}</p>
+        <div>
+          <h4>Dependencies</h4>
+          ${
+            t.dependencies && t.dependencies.length
+              ? `<ul>${t.dependencies.map(dep => `<li><a href="/tickets/${projectId}/${dep}">${dep}</a></li>`).join('')}</ul>`
+              : '<p class="muted">None</p>'
+          }
+        </div>
         <div>
           <h4>Acceptance Criteria</h4>
           ${t.acceptance_criteria && t.acceptance_criteria.length ? `<ul>${t.acceptance_criteria.map(a => `<li>${a}</li>`).join('')}</ul>` : '<p class="muted">None</p>'}
@@ -128,20 +142,37 @@
       document.getElementById('description').value = t.description;
       document.getElementById('status').value = t.status;
       document.getElementById('assignee').value = t.assignee_username || '';
-      document.getElementById('blockers').value = t.blockers || '';
       document.getElementById('acceptance-criteria').value = (t.acceptance_criteria || []).join('\\n');
+    }
+
+    function populateDependencies(ticket, tickets) {
+      const select = document.getElementById('dependencies-select');
+      select.innerHTML = '';
+      const deps = ticket.dependencies || [];
+      tickets
+        .filter(t => t.key !== ticket.key)
+        .forEach(t => {
+          const opt = document.createElement('option');
+          opt.value = t.key;
+          opt.textContent = `${t.key} — ${t.title}`;
+          if (deps.includes(t.key)) {
+            opt.selected = true;
+          }
+          select.appendChild(opt);
+        });
     }
 
     document.getElementById('ticket-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const statusEl = document.getElementById('save-status');
       statusEl.textContent = 'Saving...';
+      const depsSelect = document.getElementById('dependencies-select');
       const payload = {
         title: document.getElementById('title').value,
         description: document.getElementById('description').value,
         status: document.getElementById('status').value,
         assignee_username: document.getElementById('assignee').value || null,
-        blockers: document.getElementById('blockers').value || null,
+        dependencies: Array.from(depsSelect.selectedOptions).map(o => o.value),
         acceptance_criteria: document.getElementById('acceptance-criteria').value
           .split('\\n')
           .map(x => x.trim())

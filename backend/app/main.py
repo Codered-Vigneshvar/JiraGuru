@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi import Request
 
 from .config import settings
-from .routers import auth, projects, tickets
+from .routers import auth, projects, tickets, stories
 from .storage import ensure_default_user, ensure_projects_file, ensure_dirs
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -41,6 +41,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.include_router(auth.router)
 app.include_router(projects.router)
 app.include_router(tickets.router)
+app.include_router(stories.router)
 
 
 @app.get("/health", tags=["health"])
@@ -71,6 +72,12 @@ def user_dashboard(request: Request):
 def view_project_page(request: Request, project_id: str):
     """Serve project view page."""
     return templates.TemplateResponse("project_view.html", {"request": request, "project_id": project_id})
+
+
+@app.get("/projects/{project_id}/board", include_in_schema=False)
+def project_board_page(request: Request, project_id: str):
+    """Serve Kanban board page for a project."""
+    return templates.TemplateResponse("project_board.html", {"request": request, "project_id": project_id})
 
 
 @app.get("/stories/generate", include_in_schema=False)

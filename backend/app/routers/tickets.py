@@ -18,6 +18,7 @@ from ..storage import (
     generate_new_ticket_key,
     get_project_by_id,
     load_projects,
+    PROJECTS_LOCK,
     load_ticket_comments,
     load_users,
     save_project,
@@ -61,6 +62,16 @@ def _assert_member(project: Project, user: dict) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed.")
 
 
+def _assert_member_dict(project: dict, user: dict) -> None:
+    """Membership check for raw project dicts."""
+    if user.get("is_owner"):
+        return
+    members = set(project.get("member_usernames", []) or [])
+    owner = project.get("owner_username")
+    if user["username"] not in {owner, *members}:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed.")
+
+
 def _find_ticket(project: Project, ticket_key: str) -> Tuple[int, Ticket]:
     for idx, ticket in enumerate(project.tickets):
         if ticket.key == ticket_key:
@@ -76,6 +87,19 @@ def _ensure_acceptance_criteria(ticket_data: dict) -> dict:
             "Output is clear, concise, and testable.",
         ]
     return ticket_data
+
+
+def _persist_project_dict(project_id: str, project_dict: dict) -> None:
+    """Persist a project dict by replacing it in the projects list."""
+    with PROJECTS_LOCK:
+        projects = load_projects()
+        for idx, proj in enumerate(projects):
+            if str(proj.get("id")) == str(project_id):
+                project_dict["id"] = str(project_id)
+                projects[idx] = project_dict
+                save_projects(projects)
+                return
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
 
 
 @router.post("/tickets/generate", response_model=List[Ticket])
@@ -97,7 +121,7 @@ def generate_tickets(project_id: str, x_user: str | None = Header(default=None, 
         data = _ensure_acceptance_criteria(t.model_dump())
         existing_tickets.append(data)
     project_dict["tickets"] = existing_tickets
-    save_project(project_dict)
+    _persist_project_dict(project_id, project_dict)
     return [Ticket.model_validate(_ensure_acceptance_criteria(t)) for t in existing_tickets]
 
 
@@ -126,18 +150,46 @@ def update_ticket(
     x_user: str | None = Header(default=None, alias="X-User"),
 ) -> Ticket:
     user = _require_user(x_user)
-    project = _get_project_model(project_id)
-    _assert_member(project, user)
-    idx, ticket = _find_ticket(project, ticket_key)
+    projects = load_projects()
+    proj_idx = next((i for i, p in enumerate(projects) if str(p.get("id")) == str(project_id)), None)
+    if proj_idx is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found.")
+    proj_dict = projects[proj_idx]
+    _assert_member_dict(proj_dict, user)
 
-    ticket_data = ticket.model_dump()
-    for field, value in payload.model_dump(exclude_none=True).items():
-        ticket_data[field] = value
+    tickets = proj_dict.get("tickets", [])
+    ticket_idx = next((i for i, t in enumerate(tickets) if t.get("key") == ticket_key), None)
+    if ticket_idx is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
+
+    ticket_data = dict(tickets[ticket_idx])
+    updates = payload.model_dump(exclude_none=True)
+    allowed_fields = {
+        "title",
+        "description",
+        "status",
+        "assignee_username",
+        "epic_key",
+        "dependencies",
+        "blockers",
+        "linked_document_ids",
+        "acceptance_criteria",
+    }
+
+    for field, value in updates.items():
+        if field not in allowed_fields:
+            continue
+        if field == "dependencies" and value is not None:
+            ticket_data[field] = list(value)
+        elif field == "acceptance_criteria" and value is not None:
+            ticket_data[field] = [item for item in value if item]
+        else:
+            ticket_data[field] = value
+
     ticket_data["updated_at"] = datetime.utcnow().isoformat()
 
-    project_dict = project.model_dump()
-    project_dict["tickets"][idx] = ticket_data
-    save_project(project_dict)
+    proj_dict["tickets"][ticket_idx] = ticket_data
+    _persist_project_dict(project_id, proj_dict)
     return Ticket.model_validate(_ensure_acceptance_criteria(ticket_data))
 
 
@@ -147,12 +199,12 @@ def delete_ticket(project_id: str, ticket_key: str, x_user: str | None = Header(
     user = _require_user(x_user)
     project = _get_project_model(project_id)
     _assert_member(project, user)
-    project_dict = project.model_dump()
-    filtered = [t for t in project_dict.get("tickets", []) if t.get("key") != ticket_key]
-    if len(filtered) == len(project_dict.get("tickets", [])):
+    proj_dict = project.model_dump()
+    filtered = [t for t in proj_dict.get("tickets", []) if t.get("key") != ticket_key]
+    if len(filtered) == len(proj_dict.get("tickets", [])):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
-    project_dict["tickets"] = filtered
-    save_project(project_dict)
+    proj_dict["tickets"] = filtered
+    _persist_project_dict(project_id, proj_dict)
 
 
 @router.delete("/tickets", status_code=status.HTTP_204_NO_CONTENT)
@@ -161,9 +213,9 @@ def clear_tickets(project_id: str, x_user: str | None = Header(default=None, ali
     user = _require_user(x_user)
     project = _get_project_model(project_id)
     _assert_member(project, user)
-    project_dict = project.model_dump()
-    project_dict["tickets"] = []
-    save_project(project_dict)
+    proj_dict = project.model_dump()
+    proj_dict["tickets"] = []
+    _persist_project_dict(project_id, proj_dict)
 
 
 @router.get("/requirements/plan", response_model=RequirementPlan | dict)
@@ -311,5 +363,5 @@ async def upload_ticket_document(
     ticket_data["updated_at"] = datetime.utcnow().isoformat()
     project_dict["tickets"][idx] = ticket_data
 
-    save_project(project_dict)
+    _persist_project_dict(project_id, project_dict)
     return Ticket.model_validate(ticket_data)
