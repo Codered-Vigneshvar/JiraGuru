@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 import google.generativeai as genai
 from fastapi import HTTPException
 
 from ..config import settings
 from ..models import Project
-from .story_gen import _configure_gemini, _load_project_documents
+from .story_gen import _configure_gemini, _load_project_documents, log_ai_event
 
 
 def generate_plan_for_project(project: Project, requirements: str | None = None) -> str:
@@ -40,10 +42,13 @@ Risks & Mitigations:
 Phased Plan:
 - ...
 """
+    log_ai_event(f"[Gemini Request] plan generation project={project.id} | {prompt}")
     model_name = settings.gemini_model or "models/gemini-2.5-flash"
     try:
         model = genai.GenerativeModel(model_name)
         response = model.generate_content(prompt)
+        log_ai_event(f"[Gemini Response] model={model_name} | {response.text}")
     except Exception as exc:  # noqa: BLE001
+        log_ai_event(f"[Gemini Error] model={model_name} | {exc}", level=logging.ERROR)
         raise HTTPException(status_code=502, detail=f"Gemini plan generation failed: {exc}") from exc
     return response.text or ""

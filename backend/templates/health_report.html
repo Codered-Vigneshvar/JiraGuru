@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Health</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { margin:0; font-family: "Inter", system-ui, -apple-system, sans-serif; background:#0f172a; color:#e2e8f0; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; background:#1e293b; }
+    main { max-width:1200px; margin:0 auto; padding:24px; display:flex; flex-direction:column; gap:16px; }
+    .grid { display:grid; gap:16px; }
+    .grid.two { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    .card { background:#111827; border:1px solid #1f2937; border-radius:12px; padding:16px; box-shadow:0 10px 40px rgba(0,0,0,0.35); }
+    h1 { margin:0; font-size:24px; }
+    h2 { margin:0 0 8px 0; font-size:18px; }
+    .stat { display:flex; flex-direction:column; gap:4px; }
+    .stat span { color:#94a3b8; font-size:12px; letter-spacing:0.3px; }
+    .pill { display:inline-block; padding:4px 10px; border-radius:999px; background:#1e293b; color:#cbd5e1; font-size:12px; letter-spacing:0.4px; }
+    .list { padding-left:16px; margin:8px 0 0 0; color:#cbd5e1; }
+    .progress { width:100%; background:#1f2937; border-radius:10px; height:16px; overflow:hidden; }
+    .progress-fill { height:100%; background:linear-gradient(90deg, #22d3ee, #6366f1); transition:width 200ms ease; }
+    .muted { color:#94a3b8; }
+    button { padding:8px 12px; border:none; border-radius:8px; background:#38bdf8; color:#0f172a; font-weight:700; cursor:pointer; }
+    .charts { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:16px; align-items:center; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Project Health</h1>
+      <div class="muted" id="project-subtitle">Loading...</div>
+    </div>
+    <div>
+      <button onclick="goBack()">Back</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="grid two">
+      <div class="card stat">
+        <span>Total Tickets</span>
+        <strong id="total-tickets">-</strong>
+      </div>
+      <div class="card stat">
+        <span>Average Story Points</span>
+        <strong id="avg-points">-</strong>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Completion</h2>
+      <div class="progress"><div class="progress-fill" id="completion-bar" style="width:0%"></div></div>
+      <div id="completion-text" class="muted" style="margin-top:6px;">0%</div>
+    </div>
+
+    <div class="charts">
+      <div class="card">
+        <h2>Status Breakdown</h2>
+        <canvas id="status-chart"></canvas>
+      </div>
+      <div class="card">
+        <h2>Priority Breakdown</h2>
+        <canvas id="priority-chart"></canvas>
+      </div>
+    </div>
+
+    <div class="grid two">
+      <div class="card">
+        <h2>Unassigned Tickets</h2>
+        <ul id="unassigned-list" class="list"></ul>
+      </div>
+      <div class="card">
+        <h2>Blocked Tickets</h2>
+        <ul id="blocked-list" class="list"></ul>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const projectId = "{{ project_id }}";
+    const currentUser = localStorage.getItem('currentUser');
+    if (!currentUser) window.location.href = '/';
+
+    function goBack() { window.history.back(); }
+
+    function renderList(el, items) {
+      if (!items.length) { el.innerHTML = '<li class="muted">None</li>'; return; }
+      el.innerHTML = items.map(k => `<li>${k}</li>`).join('');
+    }
+
+    async function loadReport() {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/health_report`, { headers: { 'X-User': currentUser }});
+        if (!res.ok) throw new Error('Failed to load report');
+        const data = await res.json();
+
+        document.getElementById('project-subtitle').textContent = `${data.project_code || projectId}`;
+        document.getElementById('total-tickets').textContent = data.total_tickets;
+        document.getElementById('avg-points').textContent = data.average_story_points;
+
+        const completion = data.completion_percentage || 0;
+        document.getElementById('completion-bar').style.width = `${completion}%`;
+        document.getElementById('completion-text').textContent = `${completion}% completed`;
+
+        renderList(document.getElementById('unassigned-list'), data.unassigned_tickets || []);
+        renderList(document.getElementById('blocked-list'), data.blocked_tickets || []);
+
+        const statusCtx = document.getElementById('status-chart');
+        const priorityCtx = document.getElementById('priority-chart');
+
+        const statusData = data.counts_by_status || {};
+        new Chart(statusCtx, {
+          type: 'doughnut',
+          data: {
+            labels: ['TODO', 'IN_PROGRESS', 'DONE'],
+            datasets: [{
+              data: ['TODO','IN_PROGRESS','DONE'].map(k => statusData[k] || 0),
+              backgroundColor: ['#1f2937','#0ea5e9','#10b981'],
+            }]
+          },
+          options: { plugins: { legend: { labels: { color: '#cbd5e1' }}}}
+        });
+
+        const priorityData = data.counts_by_priority || {};
+        new Chart(priorityCtx, {
+          type: 'bar',
+          data: {
+            labels: ['LOW','MEDIUM','HIGH','CRITICAL'],
+            datasets: [{
+              data: ['LOW','MEDIUM','HIGH','CRITICAL'].map(k => priorityData[k] || 0),
+              backgroundColor: ['#94a3b8','#38bdf8','#fbbf24','#f87171'],
+            }]
+          },
+          options: {
+            plugins: { legend: { display: false }},
+            scales: { x: { ticks: { color:'#cbd5e1' }}, y:{ ticks:{ color:'#cbd5e1' }, beginAtZero:true } }
+          }
+        });
+      } catch (err) {
+        alert('Unable to load health report.');
+      }
+    }
+
+    loadReport();
+  </script>
+</body>
+</html>

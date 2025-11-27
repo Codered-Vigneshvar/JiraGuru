@@ -48,6 +48,8 @@ class Project(BaseModel):
     owner_username: str
     member_usernames: List[str] = Field(default_factory=list)
     documents: List[DocumentMeta] = Field(default_factory=list)
+    epics: List["Epic"] = Field(default_factory=list)
+    stories: List["Story"] = Field(default_factory=list)
     tickets: List["Ticket"] = Field(default_factory=list)
 
 
@@ -62,6 +64,21 @@ class ProjectUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     member_usernames: Optional[List[str]] = None
+
+
+# Epic/Story models --------------------------------------------------------
+class Epic(BaseModel):
+    id: str
+    title: str
+    description: str
+
+
+class Story(BaseModel):
+    id: str
+    epic_id: str
+    title: str
+    description: str
+    acceptance_criteria: List[str] = Field(default_factory=list)
 
 
 # Ticket models --------------------------------------------------------------
@@ -79,6 +96,8 @@ class Ticket(BaseModel):
     blockers: Optional[str] = None
     linked_document_ids: List[str] = Field(default_factory=list)
     acceptance_criteria: List[str] = Field(default_factory=list)
+    story_points: Optional[int] = None
+    priority: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] = "MEDIUM"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -93,6 +112,8 @@ class TicketUpdate(BaseModel):
     blockers: Optional[str] = None
     linked_document_ids: Optional[List[str]] = None
     acceptance_criteria: Optional[List[str]] = None
+    story_points: Optional[int] = None
+    priority: Optional[Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"]] = None
 
 
 class TicketComment(BaseModel):

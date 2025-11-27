@@ -174,7 +174,15 @@ def update_ticket(
         "blockers",
         "linked_document_ids",
         "acceptance_criteria",
+        "story_points",
+        "priority",
     }
+
+    if payload.priority and payload.priority not in {"LOW", "MEDIUM", "HIGH", "CRITICAL"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid priority. Use one of: LOW, MEDIUM, HIGH, CRITICAL.",
+        )
 
     for field, value in updates.items():
         if field not in allowed_fields:
@@ -183,6 +191,8 @@ def update_ticket(
             ticket_data[field] = list(value)
         elif field == "acceptance_criteria" and value is not None:
             ticket_data[field] = [item for item in value if item]
+        elif field == "story_points":
+            ticket_data[field] = value
         else:
             ticket_data[field] = value
 

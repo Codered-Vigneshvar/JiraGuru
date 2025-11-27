@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blocker Analysis</title>
+  <style>
+    body { margin:0; font-family: "Inter", system-ui, -apple-system, sans-serif; background:#0f172a; color:#e2e8f0; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; background:#1e293b; }
+    main { max-width:1100px; margin:0 auto; padding:24px; display:flex; flex-direction:column; gap:16px; }
+    .card { background:#111827; border:1px solid #1f2937; border-radius:12px; padding:16px; box-shadow:0 12px 32px rgba(0,0,0,0.35); }
+    .root { border:1px solid #38bdf8; }
+    .muted { color:#94a3b8; }
+    .badge { display:inline-block; padding:4px 10px; border-radius:999px; font-weight:700; letter-spacing:0.3px; font-size:12px; }
+    .status-TODO { background:#1f2937; color:#e2e8f0; }
+    .status-IN_PROGRESS { background:#0ea5e9; color:#0b1725; }
+    .status-DONE { background:#10b981; color:#052e16; }
+    table { width:100%; border-collapse:collapse; margin-top:12px; }
+    th, td { text-align:left; padding:8px; border-bottom:1px solid #1f2937; }
+    th { color:#cbd5e1; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; }
+    button, a.button { padding:8px 12px; border:none; border-radius:8px; background:#38bdf8; color:#0f172a; font-weight:700; text-decoration:none; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1 style="margin:0;">Blocker Analysis</h1>
+      <div id="project-label" class="muted">Loading...</div>
+    </div>
+    <div>
+      <a class="button" id="back-link">Back to Project</a>
+    </div>
+  </header>
+
+  <main>
+    <div id="chains-container" class="card">Loading analysis...</div>
+  </main>
+
+  <script>
+    const projectId = "{{ project_id }}";
+    const currentUser = localStorage.getItem('currentUser');
+    if (!currentUser) window.location.href = '/';
+    document.getElementById('back-link').href = `/projects/${projectId}/view`;
+
+    function statusBadge(status) {
+      return `<span class="badge status-${status}">${status}</span>`;
+    }
+
+    function renderChains(data) {
+      document.getElementById('project-label').textContent = data.project_code || projectId;
+      const container = document.getElementById('chains-container');
+      if (!data.chains || !data.chains.length) {
+        container.innerHTML = '<p>No blockers detected 🎉</p>';
+        return;
+      }
+
+      container.innerHTML = data.chains.map(chain => {
+        const list = chain.affected_tickets
+          .map(t => `
+            <tr>
+              <td>${t.ticket_key}</td>
+              <td>${t.title}</td>
+              <td>${statusBadge(t.status || 'TODO')}</td>
+              <td>${t.distance}</td>
+            </tr>
+          `).join('');
+        const blockersText = chain.root_blockers_text && chain.root_blockers_text.trim()
+          ? chain.root_blockers_text
+          : 'No explicit blockers text.';
+        return `
+          <div class="card root">
+            <div style="display:flex; justify-content:space-between; gap:12px; align-items:center;">
+              <div>
+                <div><strong>${chain.root_ticket_key}</strong> — ${chain.root_title}</div>
+                <div class="muted" style="margin-top:4px;">${blockersText}</div>
+              </div>
+              ${statusBadge(chain.root_status || 'TODO')}
+            </div>
+            <table>
+              <thead>
+                <tr><th>Key</th><th>Title</th><th>Status</th><th>Distance</th></tr>
+              </thead>
+              <tbody>${list}</tbody>
+            </table>
+          </div>
+        `;
+      }).join('');
+    }
+
+    async function loadAnalysis() {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/blocker_analysis`, {
+          headers: { 'X-User': currentUser }
+        });
+        if (!res.ok) throw new Error('Failed');
+        const data = await res.json();
+        renderChains(data);
+      } catch (err) {
+        document.getElementById('chains-container').innerHTML = '<p class="muted">Unable to load blocker analysis.</p>';
+      }
+    }
+
+    loadAnalysis();
+  </script>
+</body>
+</html>

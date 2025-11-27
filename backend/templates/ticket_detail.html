@@ -40,6 +40,15 @@
           <option value="IN_PROGRESS">IN_PROGRESS</option>
           <option value="DONE">DONE</option>
         </select>
+        <label for="priority">Priority</label>
+        <select id="priority">
+          <option value="LOW">LOW</option>
+          <option value="MEDIUM">MEDIUM</option>
+          <option value="HIGH">HIGH</option>
+          <option value="CRITICAL">CRITICAL</option>
+        </select>
+        <label for="story-points">Story Points</label>
+        <input id="story-points" type="number" min="0" />
         <label for="assignee">Assignee Username</label>
         <select id="assignee">
           <option value="">Unassigned</option>
@@ -116,6 +125,8 @@
         <p class="muted">${t.description}</p>
         <p>Status: ${t.status}</p>
         <p>Type: ${t.type}</p>
+        <p>Priority: ${t.priority || 'MEDIUM'}</p>
+        <p>Story Points: ${t.story_points ?? '—'}</p>
         <p>Assignee: ${t.assignee_username || 'Unassigned'}</p>
         <p>Epic: ${t.epic_key || '-'}</p>
         <div>
@@ -141,6 +152,8 @@
       document.getElementById('title').value = t.title;
       document.getElementById('description').value = t.description;
       document.getElementById('status').value = t.status;
+      document.getElementById('priority').value = t.priority || 'MEDIUM';
+      document.getElementById('story-points').value = t.story_points ?? '';
       document.getElementById('assignee').value = t.assignee_username || '';
       document.getElementById('acceptance-criteria').value = (t.acceptance_criteria || []).join('\\n');
     }
@@ -171,6 +184,11 @@
         title: document.getElementById('title').value,
         description: document.getElementById('description').value,
         status: document.getElementById('status').value,
+        priority: document.getElementById('priority').value,
+        story_points: (() => {
+          const val = document.getElementById('story-points').value;
+          return val === '' ? null : Number(val);
+        })(),
         assignee_username: document.getElementById('assignee').value || null,
         dependencies: Array.from(depsSelect.selectedOptions).map(o => o.value),
         acceptance_criteria: document.getElementById('acceptance-criteria').value

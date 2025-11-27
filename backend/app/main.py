@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi import Request
 
 from .config import settings
-from .routers import auth, projects, tickets, stories
+from .routers import auth, projects, tickets, stories, ai_test, reports
 from .storage import ensure_default_user, ensure_projects_file, ensure_dirs
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -42,6 +42,8 @@ app.include_router(auth.router)
 app.include_router(projects.router)
 app.include_router(tickets.router)
 app.include_router(stories.router)
+app.include_router(ai_test.router)
+app.include_router(reports.router, prefix="/api", tags=["reports"])
 
 
 @app.get("/health", tags=["health"])
@@ -92,3 +94,15 @@ def ticket_detail_page(request: Request, project_id: str, ticket_key: str):
     return templates.TemplateResponse(
         "ticket_detail.html", {"request": request, "project_id": project_id, "ticket_key": ticket_key}
     )
+
+
+@app.get("/projects/{project_id}/health", include_in_schema=False)
+def health_page(request: Request, project_id: str):
+    """Serve project health report page."""
+    return templates.TemplateResponse("health_report.html", {"request": request, "project_id": project_id})
+
+
+@app.get("/projects/{project_id}/blockers", include_in_schema=False)
+def blocker_analysis_page(request: Request, project_id: str):
+    """Serve blocker analysis page."""
+    return templates.TemplateResponse("blocker_analysis.html", {"request": request, "project_id": project_id})

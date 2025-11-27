@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from typing import Dict, List, Literal
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Query, status
+from fastapi.responses import JSONResponse
 
+from ..ai.story_gen import generate_story_payload
 from ..models import Project, Ticket
-from ..storage import get_project_by_id, load_users
+from ..storage import get_project_by_id, load_users, save_project
 
 router = APIRouter(prefix="/api/projects", tags=["board"])
 
@@ -78,4 +80,55 @@ def get_board(project_id: str, x_user: str | None = Header(default=None, alias="
             "IN_PROGRESS": grouped["IN_PROGRESS"],
             "DONE": grouped["DONE"],
         },
+    }
+
+
+@router.post("/{project_id}/generate_stories")
+def generate_stories(
+    project_id: str,
+    regen: bool = Query(default=False, description="Regenerate stories if they already exist."),
+    x_user: str | None = Header(default=None, alias="X-User"),
+) -> dict:
+    """Generate epics and stories for a project with optional regeneration."""
+    user = _require_user(x_user)
+    try:
+        project = Project.model_validate(get_project_by_id(project_id))
+    except FileNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    _assert_member(project, user)
+    project_dict = project.model_dump()
+
+    if not regen and ((project_dict.get("epics") or project_dict.get("stories"))):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"success": False, "error": "Stories already exist for this project. Use regen=true to regenerate."},
+        )
+
+    if regen:
+        project_dict["epics"] = []
+        project_dict["stories"] = []
+
+    try:
+        payload, error = generate_story_payload(project, plan=project_dict.get("requirements_plan"))
+    except HTTPException as exc:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"success": False, "error": exc.detail if isinstance(exc.detail, str) else "Gemini generation failed."},
+        )
+    if error or not payload:
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"success": False, "error": error or "Invalid AI response"},
+        )
+
+    project_dict["epics"] = payload.get("epics", [])
+    project_dict["stories"] = payload.get("stories", [])
+    save_project(project_dict)
+
+    return {
+        "success": True,
+        "message": "Stories generated successfully.",
+        "epics": project_dict["epics"],
+        "stories": project_dict["stories"],
     }
