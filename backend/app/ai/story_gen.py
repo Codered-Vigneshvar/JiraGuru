@@ -75,7 +75,7 @@ def _configure_gemini():
 
 
 def _build_prompt(project: Project, content: str, plan: str | None = None) -> str:
-    plan_section = f"\nExisting Requirement Plan:\n{plan}\n" if plan else ""
+    plan_section = f"\nExisting Requirement Plan (must be reflected in tickets):\n{plan}\n" if plan else ""
     schema = """
 {
   "epics": [
@@ -97,7 +97,7 @@ def _build_prompt(project: Project, content: str, plan: str | None = None) -> st
 }
 """.strip()
     return f"""
-You are a product analyst. Based on the project documents below, generate concise EPICs and user STORIES.
+You are a product manager creating execution-ready tickets. Based on the project documents and requirements plan, produce technical, actionable EPICs and STORIES.
 
 Project Code: {project.code}
 Project Title: {project.title}
@@ -107,13 +107,14 @@ Project Description: {project.description}
 Documents:
 {content}
 
-Return STRICT JSON ONLY (no markdown, no code fences) with this schema:
+Requirements for output:
+- Return STRICT JSON ONLY (no markdown, no code fences) with this schema:
 {schema}
-
 - Use the project code "{project.code}" when building ids (e.g. {project.code}-EP01, {project.code}-001).
-- Limit to 3-5 epics and 3-10 stories total.
-- Every story must reference a valid epic_id.
-- acceptance_criteria must be a list of short, testable statements.
+- Create as many epics and stories as needed; every EPIC must have multiple STORIES (at least 2) that it is split into.
+- Every story must reference a valid epic_id (tag each story to its EPIC).
+- Descriptions must be specific and technical (APIs, data flow, validation, edge cases, dependencies).
+- acceptance_criteria must be a list of short, testable statements tied to functionality.
 """
 
 
@@ -186,6 +187,7 @@ def validate_story_payload(payload: dict) -> Tuple[bool, List[str]]:
         if isinstance(epic.get("id"), str):
             epic_ids.add(epic["id"])
 
+    story_epic_map: Dict[str, int] = {}
     for idx, story in enumerate(stories):
         if not isinstance(story, dict):
             errors.append(f"stories[{idx}] must be an object.")
@@ -201,6 +203,13 @@ def validate_story_payload(payload: dict) -> Tuple[bool, List[str]]:
             errors.append(f"stories[{idx}].acceptance_criteria items must be non-empty strings.")
         if epic_ids and isinstance(story.get("epic_id"), str) and story["epic_id"] not in epic_ids:
             errors.append(f"stories[{idx}].epic_id does not match any epic.")
+        else:
+            story_epic_map[story.get("epic_id")] = story_epic_map.get(story.get("epic_id"), 0) + 1
+
+    if epic_ids:
+        for eid in epic_ids:
+            if story_epic_map.get(eid, 0) == 0:
+                errors.append(f"No stories provided for epic {eid}. Every epic must have at least one story.")
 
     return len(errors) == 0, errors
 

@@ -26,6 +26,7 @@ from ..storage import (
     load_ticket_comments,
     save_ticket_comments,
 )
+from ..ai.project_index import ProjectIndex
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -181,6 +182,11 @@ async def upload_document(
     projects = load_projects()
     projects[idx] = project
     save_projects(projects)
+    try:
+        ProjectIndex(project_id).upsert_doc(doc_id)
+    except Exception:
+        # Swallow indexing errors to avoid breaking upload; can be logged later.
+        pass
     return Project.model_validate(project)
 
 

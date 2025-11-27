@@ -51,6 +51,8 @@ class Project(BaseModel):
     epics: List["Epic"] = Field(default_factory=list)
     stories: List["Story"] = Field(default_factory=list)
     tickets: List["Ticket"] = Field(default_factory=list)
+    requirements_plan: Optional[str] = None
+    requirements_plan_updated_at: Optional[str] = None
 
 
 class ProjectCreate(BaseModel):

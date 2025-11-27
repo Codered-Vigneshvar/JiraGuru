@@ -160,7 +160,24 @@ def save_project_plan(project_id: str, content: str) -> Dict[str, Any]:
     project["requirements_plan"] = content
     project["requirements_plan_updated_at"] = datetime.utcnow().isoformat()
     save_project(project)
+    _append_plan_version(project_id, content, project["requirements_plan_updated_at"])
     return project
+
+
+def _append_plan_version(project_id: str, content: str, ts: str) -> None:
+    """Persist a versioned history entry for requirements plan."""
+    versions_path = PROJECTS_DIR / project_id / "plan_versions.json"
+    ensure_dirs(versions_path.parent)
+    existing = load_json(versions_path, default={"versions": []})
+    versions = existing.get("versions", [])
+    versions.append({"content": content, "saved_at": ts})
+    save_json(versions_path, {"versions": versions})
+
+
+def load_plan_versions(project_id: str) -> Dict[str, Any]:
+    """Return version history for requirements plan."""
+    versions_path = PROJECTS_DIR / project_id / "plan_versions.json"
+    return load_json(versions_path, default={"versions": []})
 
 
 

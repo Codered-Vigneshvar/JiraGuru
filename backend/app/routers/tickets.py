@@ -11,6 +11,7 @@ from fastapi import APIRouter, File, Header, HTTPException, UploadFile, status
 
 from ..ai.story_gen import generate_epics_and_stories_for_project
 from ..ai.plan_gen import generate_plan_for_project
+from ..ai.project_index import ProjectIndex
 from ..models import DocumentMeta, Project, Ticket, TicketComment, TicketUpdate, RequirementPlan
 from ..storage import (
     ensure_project_doc_dir,
@@ -25,6 +26,7 @@ from ..storage import (
     save_projects,
     save_ticket_comments,
     save_project_plan,
+    load_plan_versions,
 )
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -122,6 +124,12 @@ def generate_tickets(project_id: str, x_user: str | None = Header(default=None, 
         existing_tickets.append(data)
     project_dict["tickets"] = existing_tickets
     _persist_project_dict(project_id, project_dict)
+    try:
+        index = ProjectIndex(project_id)
+        for t in new_tickets:
+            index.upsert_ticket(t.key)
+    except Exception:
+        pass
     return [Ticket.model_validate(_ensure_acceptance_criteria(t)) for t in existing_tickets]
 
 
@@ -200,6 +208,10 @@ def update_ticket(
 
     proj_dict["tickets"][ticket_idx] = ticket_data
     _persist_project_dict(project_id, proj_dict)
+    try:
+        ProjectIndex(project_id).upsert_ticket(ticket_key)
+    except Exception:
+        pass
     return Ticket.model_validate(_ensure_acceptance_criteria(ticket_data))
 
 
@@ -261,6 +273,16 @@ def save_requirements_plan(
         content=updated_project.get("requirements_plan", ""),
         updated_at=datetime.fromisoformat(updated_project.get("requirements_plan_updated_at")),
     )
+
+
+@router.get("/requirements/plan/versions")
+def list_plan_versions(project_id: str, x_user: str | None = Header(default=None, alias="X-User")) -> dict:
+    """Return version history of requirements plan."""
+    user = _require_user(x_user)
+    project = _get_project_model(project_id)
+    _assert_member(project, user)
+    versions = load_plan_versions(project_id).get("versions", [])
+    return {"project_id": project_id, "versions": versions}
 
 
 @router.post("/requirements/plan/generate", response_model=RequirementPlan)

@@ -106,3 +106,9 @@ def health_page(request: Request, project_id: str):
 def blocker_analysis_page(request: Request, project_id: str):
     """Serve blocker analysis page."""
     return templates.TemplateResponse("blocker_analysis.html", {"request": request, "project_id": project_id})
+
+
+@app.get("/projects/{project_id}/impact", include_in_schema=False)
+def impact_placeholder_page(request: Request, project_id: str):
+    """Placeholder impact analysis page."""
+    return templates.TemplateResponse("impact_placeholder.html", {"request": request, "project_id": project_id})

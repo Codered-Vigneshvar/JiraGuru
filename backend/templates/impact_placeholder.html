@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Impact Analysis</title>
+  <style>
+    body { margin:0; font-family: "Inter", system-ui, -apple-system, sans-serif; background:#0f172a; color:#e2e8f0; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; background:#1e293b; }
+    main { max-width:1100px; margin:0 auto; padding:24px; display:flex; flex-direction:column; gap:16px; }
+    .card { background:#111827; border:1px solid #1f2937; border-radius:12px; padding:16px; box-shadow:0 10px 32px rgba(0,0,0,0.35); }
+    button, a.button { padding:8px 12px; border:none; border-radius:8px; background:#38bdf8; color:#0f172a; font-weight:700; text-decoration:none; cursor:pointer; }
+    label { display:block; margin-bottom:6px; }
+    select { width:100%; padding:10px; border-radius:8px; border:1px solid #1f2937; background:#0b162a; color:#e2e8f0; }
+    .muted { color:#94a3b8; }
+    .grid { display:grid; gap:16px; }
+    .grid.two { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+    table { width:100%; border-collapse:collapse; margin-top:12px; }
+    th, td { text-align:left; padding:8px; border-bottom:1px solid #1f2937; }
+    th { color:#cbd5e1; font-size:12px; text-transform:uppercase; letter-spacing:0.5px; }
+    .badge { display:inline-block; padding:4px 10px; border-radius:999px; font-weight:700; letter-spacing:0.3px; font-size:12px; }
+    .HIGH { background:#f87171; color:#0f172a; }
+    .MEDIUM { background:#fbbf24; color:#0f172a; }
+    .LOW { background:#38bdf8; color:#0b1725; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1 style="margin:0;">AI Impact Analysis</h1>
+      <div class="muted" id="project-subtitle">Loading...</div>
+    </div>
+    <div><a class="button" href="/projects/{{ project_id }}/view">Back to Project</a></div>
+  </header>
+  <main>
+    <div class="card">
+      <label for="doc-select">Select document to analyze</label>
+      <select id="doc-select"></select>
+      <div style="margin-top:10px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+        <button id="run-btn">Analyze Requirement Change</button>
+        <button id="focus-btn" class="button">What should we work on next?</button>
+        <span id="run-status" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Impact Chat (Requirement Changes)</h3>
+      <div id="chat-messages" style="max-height:200px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding:8px; background:#0b162a; border-radius:8px; border:1px solid #1f2937;"></div>
+      <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+        <input id="chat-input" placeholder="Ask about change impacts..." style="flex:1; padding:10px; border-radius:8px; border:1px solid #1f2937; background:#0b162a; color:#e2e8f0;" />
+        <button id="chat-send">Send</button>
+      </div>
+      <div id="chat-status" class="muted" style="margin-top:6px;"></div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">Requirement Change Impact</h3>
+      <div id="change-note" class="muted"></div>
+      <h4>Change Summary</h4>
+      <div id="change-summary" class="muted">No summary yet.</div>
+      <div style="margin-top:12px;">
+        <h4>Impacted Tickets</h4>
+        <div id="tickets-container" class="muted">No results yet.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-top:0;">What should we work on next?</h3>
+      <div id="focus-summary" class="muted">No summary yet.</div>
+      <div id="focus-table" class="muted" style="margin-top:12px;">No results yet.</div>
+    </div>
+  </main>
+
+  <div id="reason-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center; padding:20px;">
+    <div style="background:#111827; border:1px solid #1f2937; border-radius:12px; padding:16px; max-width:600px; width:100%; box-shadow:0 10px 32px rgba(0,0,0,0.35);">
+      <h3 style="margin-top:0;">Impact Reason</h3>
+      <div id="reason-text" style="white-space:pre-wrap; color:#e2e8f0;"></div>
+      <div style="margin-top:12px; text-align:right;">
+        <button id="reason-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const projectId = "{{ project_id }}";
+    const currentUser = localStorage.getItem('currentUser');
+    if (!currentUser) window.location.href = '/';
+
+    const docSelect = document.getElementById('doc-select');
+    const runBtn = document.getElementById('run-btn');
+    const focusBtn = document.getElementById('focus-btn');
+    const runStatus = document.getElementById('run-status');
+    const ticketsContainer = document.getElementById('tickets-container');
+    const changeNote = document.getElementById('change-note');
+    const changeSummaryEl = document.getElementById('change-summary');
+    const focusSummaryEl = document.getElementById('focus-summary');
+    const focusTableEl = document.getElementById('focus-table');
+    const chatMessagesGeneral = document.getElementById('chat-messages-general');
+    const chatInputGeneral = document.getElementById('chat-input-general');
+    const chatMessagesEl = document.getElementById('chat-messages');
+    const chatInput = document.getElementById('chat-input');
+    const chatSend = document.getElementById('chat-send');
+    const chatStatus = document.getElementById('chat-status');
+    const reasonModal = document.getElementById('reason-modal');
+    const reasonText = document.getElementById('reason-text');
+    const reasonClose = document.getElementById('reason-close');
+    let chatHistory = [];
+
+    async function fetchJSON(url, options = {}) {
+      const headers = options.headers || {};
+      headers['X-User'] = currentUser || '';
+      options.headers = headers;
+      const res = await fetch(url, options);
+      if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      return res.json();
+    }
+
+    function renderTickets(list) {
+      if (!list || !list.length) {
+        ticketsContainer.innerHTML = '<p class="muted">No impacted tickets.</p>';
+        return;
+      }
+      const rows = list.map(t => `
+        <tr>
+          <td>${t.ticket_key}</td>
+          <td>${t.title || ''}</td>
+          <td><span class="badge ${t.impact_level}">${t.impact_level}</span></td>
+          <td>${t.status || ''}</td>
+          <td style="width:120px;"><button class="button view-reason" data-reason="${(t.reason || '').replace(/\"/g,'&quot;')}">View reason</button></td>
+        </tr>
+      `).join('');
+      ticketsContainer.innerHTML = `
+        <table>
+          <thead>
+            <tr><th>Key</th><th>Title</th><th>Impact</th><th>Status</th><th>Reason</th></tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+      ticketsContainer.querySelectorAll('.view-reason').forEach(btn => {
+        btn.addEventListener('click', () => {
+          reasonText.textContent = btn.getAttribute('data-reason') || 'No reason provided.';
+          reasonModal.style.display = 'flex';
+        });
+      });
+    }
+
+    function renderReport(text) {
+      if (!text) {
+        reportContainer.innerHTML = '<p class="muted">No report yet.</p>';
+        return;
+      }
+      const sanitize = (s) => s.replace(/[#*]+/g, '');
+      const esc = (s) => sanitize(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      reportContainer.innerHTML = esc(text).replace(/\\n/g, '<br>');
+    }
+
+    async function loadDocs() {
+      try {
+        const project = await fetchJSON(`/api/projects/${projectId}`);
+        document.getElementById('project-subtitle').textContent = `${project.code} — ${project.title}`;
+        if (!project.documents || !project.documents.length) {
+          docSelect.innerHTML = '<option value="">No documents available</option>';
+          runBtn.disabled = true;
+          return;
+        }
+        docSelect.innerHTML = `<option value="all">All documents</option>` + project.documents.map(d => `<option value="${d.id}">${d.original_name || d.filename}</option>`).join('');
+      } catch (err) {
+        docSelect.innerHTML = '<option value="">Failed to load documents</option>';
+        runBtn.disabled = true;
+      }
+    }
+
+    async function runChangeAnalysis() {
+      const docId = docSelect.value;
+      if (!docId) return;
+      runStatus.textContent = 'Running...';
+      runBtn.disabled = true;
+      ticketsContainer.innerHTML = '<p class="muted">Processing...</p>';
+      changeNote.textContent = '';
+      changeSummaryEl.textContent = 'Processing...';
+      try {
+        const data = await fetchJSON(`/api/projects/${projectId}/impact_ai?doc_id=${encodeURIComponent(docId)}`);
+        if (data.from_cache && data.has_changes === false) {
+          changeNote.textContent = 'No changes detected since last analysis. Showing previous results.';
+        } else {
+          changeNote.textContent = '';
+        }
+        changeSummaryEl.textContent = data.change_summary || 'No summary.';
+        renderTickets(data.impacted_tickets || []);
+        runStatus.textContent = 'Done.';
+      } catch (err) {
+        ticketsContainer.innerHTML = '<p class="muted">Failed to run analysis.</p>';
+        changeSummaryEl.textContent = 'Failed to generate summary.';
+        runStatus.textContent = 'Error.';
+      } finally {
+        runBtn.disabled = false;
+      }
+    }
+
+    async function runFocus() {
+      runStatus.textContent = 'Fetching focus tickets...';
+      focusBtn.disabled = true;
+      focusSummaryEl.textContent = 'Loading...';
+      focusTableEl.innerHTML = '<p class="muted">Loading...</p>';
+      try {
+        const data = await fetchJSON(`/api/projects/${projectId}/focus_ai`);
+        focusSummaryEl.textContent = data.summary || 'No summary available.';
+        const rows = (data.top_tickets || []).map(t => `
+          <tr>
+            <td>${t.ticket_key}</td>
+            <td>${t.title || ''}</td>
+            <td>${t.status || ''}</td>
+            <td>${t.priority || ''}</td>
+            <td>${t.focus_reason || ''}</td>
+          </tr>
+        `).join('');
+        if (rows) {
+          focusTableEl.innerHTML = `
+            <table>
+              <thead><tr><th>Key</th><th>Title</th><th>Status</th><th>Priority</th><th>Focus Reason</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          `;
+        } else {
+          focusTableEl.innerHTML = '<p class="muted">No focus tickets available.</p>';
+        }
+        runStatus.textContent = '';
+      } catch (err) {
+        focusSummaryEl.textContent = 'Failed to load focus suggestions.';
+        focusTableEl.innerHTML = '<p class="muted">Error.</p>';
+        runStatus.textContent = 'Error.';
+      } finally {
+        focusBtn.disabled = false;
+      }
+    }
+
+    runBtn.addEventListener('click', runChangeAnalysis);
+    focusBtn.addEventListener('click', runFocus);
+    loadDocs();
+
+    function appendChat(role, content) {
+      const div = document.createElement('div');
+      div.innerHTML = `<strong>${role === 'user' ? 'You' : 'AI'}:</strong> ${content}`;
+      chatMessagesEl.appendChild(div);
+      chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+    }
+
+    async function sendChat() {
+      const msg = chatInput.value.trim();
+      if (!msg) return;
+      const docId = docSelect.value;
+      if (!docId) { chatStatus.textContent = 'Select a document first.'; return; }
+      chatHistory.push({ role: 'user', content: msg });
+      appendChat('user', msg);
+      chatInput.value = '';
+      chatStatus.textContent = 'Thinking...';
+      try {
+        const data = await fetchJSON(`/api/projects/${projectId}/impact_chat?doc_id=${encodeURIComponent(docId)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: chatHistory })
+        });
+        const reply = data.reply || 'No answer.';
+        chatHistory.push({ role: 'assistant', content: reply });
+        appendChat('assistant', reply);
+        if (data.citations && data.citations.length) {
+          const cites = data.citations.map(c => `${c.ticket_key || ''} (${(c.excerpt || '').slice(0,80)}...)`).join('<br>');
+          appendChat('assistant', `<em>Evidence:</em><br>${cites}`);
+        }
+        chatStatus.textContent = '';
+      } catch (err) {
+        chatStatus.textContent = 'Chat failed.';
+      }
+    }
+
+    chatSend.addEventListener('click', sendChat);
+    chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendChat(); }});
+    reasonClose.addEventListener('click', () => { reasonModal.style.display = 'none'; });
+    reasonModal.addEventListener('click', (e) => { if (e.target === reasonModal) reasonModal.style.display = 'none'; });
+  </script>
+</body>
+</html>

@@ -10,3 +10,4 @@ langchain-core
 google-generativeai
 python-pptx
 jinja2
+typing_extensions

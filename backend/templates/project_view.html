@@ -40,20 +40,60 @@
       <a href="/projects/{{ project_id }}/board"><button type="button">Open Board</button></a>
       <a href="/projects/{{ project_id }}/health"><button type="button">View Health Report</button></a>
       <a href="/projects/{{ project_id }}/blockers"><button type="button">Blocker Analysis</button></a>
+      <a href="/projects/{{ project_id }}/impact"><button type="button">AI Impact Analysis</button></a>
     </div>
   </header>
   <main>
     <div id="project-container" class="card">
       Loading project...
     </div>
+    <div id="project-edit" class="card">
+      <h3>Edit Project</h3>
+      <p class="muted" id="edit-hint">Only the owner can edit.</p>
+      <form id="project-form">
+        <label for="project-title">Title</label>
+        <input id="project-title" />
+        <label for="project-description">Description</label>
+        <textarea id="project-description" rows="3"></textarea>
+        <label for="project-members">Members (comma separated)</label>
+        <input id="project-members" />
+        <button type="submit">Save Changes</button>
+        <span id="project-save-status" class="muted"></span>
+      </form>
+    </div>
+    <div id="general-chat" class="card">
+      <h3>Project Chat</h3>
+      <div id="chat-messages-general" style="max-height:200px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding:8px; background:#0b162a; border-radius:8px; border:1px solid #1f2937;"></div>
+      <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+        <input id="chat-input-general" placeholder="Ask about the project..." style="flex:1; padding:10px; border-radius:8px; border:1px solid #1f2937; background:#0b162a; color:#e2e8f0;" />
+        <button id="chat-send-general">Send</button>
+      </div>
+      <div id="chat-status-general" class="muted" style="margin-top:6px;"></div>
+    </div>
+    <div id="epic-stories" class="card"></div>
     <div id="tickets-container" class="card"></div>
     <div id="plan-container" class="card"></div>
+    <div id="plan-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center; padding:20px;">
+      <div style="background:#111827; border:1px solid #334155; border-radius:12px; padding:16px; max-width:800px; width:100%; max-height:80vh; overflow:auto; box-shadow:0 10px 32px rgba(0,0,0,0.35);">
+        <h3 style="margin-top:0;">Plan Version</h3>
+        <div id="plan-modal-body" style="white-space:pre-wrap; color:#e2e8f0;"></div>
+        <div style="margin-top:12px; text-align:right;">
+          <button id="plan-modal-close">Close</button>
+        </div>
+      </div>
+    </div>
   </main>
 
   <script>
     const projectId = "{{ project_id }}";
     const currentUser = localStorage.getItem('currentUser');
     let projectTickets = [];
+    let currentProjectOwner = null;
+    let currentProjectMembers = [];
+    let generalChatHistory = [];
+    const planModal = document.getElementById('plan-modal');
+    const planModalBody = document.getElementById('plan-modal-body');
+    const planModalClose = document.getElementById('plan-modal-close');
     if (!currentUser) {
       window.location.href = '/';
     }
@@ -77,6 +117,8 @@
       }
       const p = await res.json();
       projectTickets = p.tickets || [];
+      currentProjectOwner = p.owner_username;
+      currentProjectMembers = p.member_usernames || [];
       container.innerHTML = `
         <h2>${p.title} (${p.code})</h2>
         <p class="muted">${p.description}</p>
@@ -87,6 +129,7 @@
           ${p.documents.length ? `<ul>${p.documents.map(d => `<li>${d.original_name} <span class="muted">(${d.content_type})</span></li>`).join('')}</ul>` : '<p class="muted">No documents yet.</p>'}
         </div>
       `;
+      populateProjectForm(p);
       renderTickets();
       renderPlan();
     }
@@ -146,6 +189,55 @@
       `;
 
       wireTicketActions();
+      renderEpicStories(epics, stories);
+    }
+
+    function renderEpicStories(epics, stories) {
+      const container = document.getElementById('epic-stories');
+      if (!epics.length) {
+        container.innerHTML = '<h3>Epics & Stories</h3><p class="muted">No epics yet.</p>';
+        return;
+      }
+      const rows = epics.map(epic => {
+        const linked = stories.filter(s => s.epic_key === epic.key);
+        const options = linked.length
+          ? linked.map(s => `<option value="${s.key}">${s.key} — ${s.title}</option>`).join('')
+          : '<option value="">No stories linked</option>';
+        return `
+          <div class="card" style="margin-bottom:10px; background:#111827; border:1px solid #334155;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+              <div>
+                <strong>${epic.key}</strong> — ${epic.title}
+                <div class="muted">${epic.description || ''}</div>
+              </div>
+              <div style="display:flex; gap:8px; align-items:center;">
+                <select class="epic-story-select" data-epic="${epic.key}" style="background:#0b162a; color:#e2e8f0; border:1px solid #334155; border-radius:6px; padding:6px;">
+                  ${options}
+                </select>
+                <button class="ghost-btn delete-epic-story" data-epic="${epic.key}">Delete Story</button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      container.innerHTML = `<h3>Epics & Stories Map</h3>${rows}`;
+      container.querySelectorAll('.delete-epic-story').forEach(btn => {
+        btn.onclick = async () => {
+          const epicKey = btn.getAttribute('data-epic');
+          const select = container.querySelector(`.epic-story-select[data-epic="${epicKey}"]`);
+          const storyKey = select ? select.value : '';
+          if (!storyKey) {
+            alert('No story selected.');
+            return;
+          }
+          if (!confirm(`Delete story ${storyKey}?`)) return;
+          await fetch(`/api/projects/${projectId}/tickets/${storyKey}`, {
+            method: 'DELETE',
+            headers: { 'X-User': currentUser }
+          });
+          loadProject();
+        };
+      });
     }
 
     function wireTicketActions() {
@@ -189,14 +281,144 @@
         headers: { 'X-User': currentUser }
       });
       const planData = await planRes.json();
+      const versionsRes = await fetch(`/api/projects/${projectId}/requirements/plan/versions`, {
+        headers: { 'X-User': currentUser }
+      }).then(r => r.json()).catch(() => ({ versions: [] }));
+      const versions = versionsRes.versions || [];
+      const latestText = planData.content || '';
+      const historyList = versions.slice().reverse().map((v, idx) => {
+        const label = v.saved_at || `Version ${versions.length - idx}`;
+        const preview = (v.content || '').slice(0, 120) + ((v.content || '').length > 120 ? '...' : '');
+        return `<li><button class="ghost-btn plan-version-btn" data-idx="${versions.length - 1 - idx}">${label}</button> <span class="muted">${preview}</span></li>`;
+      }).join('');
       document.getElementById('plan-container').innerHTML = `
         <h3>Requirements Plan</h3>
         <p class="muted">${planData.updated_at ? 'Last updated: ' + planData.updated_at : 'Not saved yet.'}</p>
-        <div>${renderMarkdown(planData.content || '')}</div>
+        <textarea id="plan-text" rows="6" style="width:100%; background:#0b162a; color:#e2e8f0; border:1px solid #334155; border-radius:8px; padding:10px;">${latestText}</textarea>
+        <div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+          <button id="plan-save-btn">Save Plan</button>
+          <span id="plan-save-status" class="muted"></span>
+        </div>
+        <h4>History</h4>
+        ${versions.length ? `<ul id="plan-history" style="list-style:none; padding-left:0;">${historyList}</ul>` : '<p class="muted">No versions yet.</p>'}
       `;
+      document.getElementById('plan-save-btn').onclick = savePlan;
+      document.querySelectorAll('.plan-version-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const idx = Number(btn.getAttribute('data-idx'));
+          const version = versions[idx];
+          if (version) {
+            planModalBody.innerHTML = `<p class="muted">${version.saved_at || ''}</p><div>${renderMarkdown(version.content || '')}</div>`;
+            planModal.style.display = 'flex';
+          }
+        });
+      });
+    }
+    async function savePlan() {
+      const content = document.getElementById('plan-text').value;
+      const statusEl = document.getElementById('plan-save-status');
+      statusEl.textContent = 'Saving...';
+      try {
+        await fetch(`/api/projects/${projectId}/requirements/plan`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User': currentUser
+          },
+          body: JSON.stringify({ content })
+        }).then(r => {
+          if (!r.ok) throw new Error('Save failed');
+          return r.json();
+        });
+        statusEl.textContent = 'Saved.';
+        renderPlan();
+      } catch (err) {
+        statusEl.textContent = 'Save failed.';
+      }
     }
 
     loadProject();
+
+    function populateProjectForm(p) {
+      document.getElementById('project-title').value = p.title || '';
+      document.getElementById('project-description').value = p.description || '';
+      document.getElementById('project-members').value = (p.member_usernames || []).join(', ');
+      const isOwner = currentUser === p.owner_username;
+      document.getElementById('project-form').querySelectorAll('input, textarea, button').forEach(el => el.disabled = !isOwner);
+      document.getElementById('edit-hint').textContent = isOwner ? 'You are the owner. Edit details below.' : 'Only the owner can edit.';
+    }
+
+    document.getElementById('project-form').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const statusEl = document.getElementById('project-save-status');
+      statusEl.textContent = 'Saving...';
+      const members = document.getElementById('project-members').value.split(',').map(x => x.trim()).filter(Boolean);
+      const payload = {
+        title: document.getElementById('project-title').value,
+        description: document.getElementById('project-description').value,
+        member_usernames: members,
+      };
+      try {
+        await fetch(`/api/projects/${projectId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User': currentUser
+          },
+          body: JSON.stringify(payload)
+        }).then(r => {
+          if (!r.ok) throw new Error('Save failed');
+          return r.json();
+        });
+        statusEl.textContent = 'Saved.';
+        loadProject();
+      } catch (err) {
+        statusEl.textContent = 'Failed to save (owner only).';
+      }
+    });
+
+    // ---------------- General chat (project-level)
+    const chatMessagesGeneral = document.getElementById('chat-messages-general');
+    const chatInputGeneral = document.getElementById('chat-input-general');
+    const chatSendGeneral = document.getElementById('chat-send-general');
+    const chatStatusGeneral = document.getElementById('chat-status-general');
+
+    function appendGeneral(role, content) {
+      const div = document.createElement('div');
+      div.innerHTML = `<strong>${role === 'user' ? 'You' : 'AI'}:</strong> ${content}`;
+      chatMessagesGeneral.appendChild(div);
+      chatMessagesGeneral.scrollTop = chatMessagesGeneral.scrollHeight;
+    }
+
+    async function sendGeneralChat() {
+      const msg = chatInputGeneral.value.trim();
+      if (!msg) return;
+      generalChatHistory.push({ role: 'user', content: msg });
+      appendGeneral('user', msg);
+      chatInputGeneral.value = '';
+      chatStatusGeneral.textContent = 'Thinking...';
+      try {
+        const data = await fetch(`/api/projects/${projectId}/general_chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User': currentUser || ''
+          },
+          body: JSON.stringify({ messages: generalChatHistory })
+        }).then(r => r.json());
+        const reply = data.reply || 'No answer.';
+        generalChatHistory.push({ role: 'assistant', content: reply });
+        appendGeneral('assistant', reply);
+        chatStatusGeneral.textContent = '';
+      } catch (err) {
+        chatStatusGeneral.textContent = 'Chat failed.';
+      }
+    }
+
+    chatSendGeneral.addEventListener('click', sendGeneralChat);
+    chatInputGeneral.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendGeneralChat(); }});
+    planModalClose.addEventListener('click', () => { planModal.style.display = 'none'; });
+    planModal.addEventListener('click', (e) => { if (e.target === planModal) planModal.style.display = 'none'; });
   </script>
 </body>
 </html>
