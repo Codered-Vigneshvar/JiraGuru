@@ -25,6 +25,7 @@ from ..storage import (
     save_projects,
     load_ticket_comments,
     save_ticket_comments,
+    append_change_entry,
 )
 from ..ai.project_index import ProjectIndex
 
@@ -130,6 +131,8 @@ def update_project(
     if not (user.get("is_owner") or user["username"] == project.get("owner_username")):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed.")
 
+    prev_description = project.get("description") or ""
+    prev_title = project.get("title") or ""
     if payload.title is not None:
         project["title"] = payload.title
     if payload.description is not None:
@@ -145,6 +148,10 @@ def update_project(
     projects = load_projects()
     projects[idx] = project
     save_projects(projects)
+    if payload.title is not None and payload.title != prev_title:
+        append_change_entry(project_id, "title", prev_title, payload.title or "", user.get("username"))
+    if payload.description is not None and payload.description != prev_description:
+        append_change_entry(project_id, "description", prev_description, payload.description or "", user.get("username"))
     return Project.model_validate(project)
 
 

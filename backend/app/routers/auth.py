@@ -63,3 +63,30 @@ def create_user(payload: UserCreate, x_user: str | None = Header(default=None, a
     users.append(new_user.model_dump())
     save_users(users)
     return UserPublic.model_validate(new_user.model_dump())
+
+
+@router.delete("/users/{username}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(username: str, x_user: str | None = Header(default=None, alias="X-User")) -> None:
+    """Delete a non-owner user (owner only)."""
+    _require_owner(x_user)
+    users = load_users()
+    user = next((u for u in users if u.get("username") == username), None)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found.")
+    if user.get("is_owner"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot delete owner user.")
+    users = [u for u in users if u.get("username") != username]
+    save_users(users)
+
+    # Also remove the user from project memberships if present
+    from ..storage import load_projects, save_projects
+
+    projects = load_projects()
+    changed = False
+    for proj in projects:
+        members = proj.get("member_usernames", [])
+        if username in members:
+            proj["member_usernames"] = [m for m in members if m != username]
+            changed = True
+    if changed:
+        save_projects(projects)

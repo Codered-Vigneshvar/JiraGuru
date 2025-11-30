@@ -180,6 +180,57 @@ def load_plan_versions(project_id: str) -> Dict[str, Any]:
     return load_json(versions_path, default={"versions": []})
 
 
+# Change log helpers --------------------------------------------------------
+def _change_log_path(project_id: str) -> Path:
+    return PROJECTS_DIR / project_id / "change_log.json"
+
+
+def load_change_log(project_id: str) -> Dict[str, Any]:
+    """Load change log entries for a project."""
+    return load_json(_change_log_path(project_id), default={"entries": []})
+
+
+def _next_change_id(entries: List[Dict[str, Any]]) -> str:
+    existing = [int(e.get("id", "chg_0").split("_")[1]) for e in entries if str(e.get("id", "")).startswith("chg_")]
+    next_num = max(existing or [0]) + 1
+    return f"chg_{next_num}"
+
+
+def append_change_entry(project_id: str, change_type: str, old: str, new: str, user: str | None = None) -> Dict[str, Any]:
+    """Append a change log entry capturing old/new content for impact history."""
+    log_path = _change_log_path(project_id)
+    ensure_dirs(log_path.parent)
+    data = load_change_log(project_id)
+    entries = data.get("entries", [])
+    entry = {
+        "id": _next_change_id(entries),
+        "type": change_type,
+        "old": old or "",
+        "new": new or "",
+        "saved_at": datetime.utcnow().isoformat(),
+        "user": user,
+    }
+    entries.append(entry)
+    save_json(log_path, {"entries": entries})
+    return entry
+
+
+# Impacted tickets cache ----------------------------------------------------
+def _impacted_cache_path(project_id: str) -> Path:
+    return PROJECTS_DIR / project_id / "impacted_cache.json"
+
+
+def load_impacted_cache(project_id: str) -> Dict[str, Any]:
+    """Load impacted tickets cache entries."""
+    return load_json(_impacted_cache_path(project_id), default={"entries": []})
+
+
+def save_impacted_cache(project_id: str, entries: List[Dict[str, Any]]) -> None:
+    """Persist impacted tickets cache entries."""
+    path = _impacted_cache_path(project_id)
+    ensure_dirs(path.parent)
+    save_json(path, {"entries": entries})
+
 
 
 def delete_project(project_id: str) -> None:
@@ -193,6 +244,21 @@ def delete_project(project_id: str) -> None:
     proj_dir = PROJECTS_DIR / project_id
     if proj_dir.exists():
         shutil.rmtree(proj_dir, ignore_errors=True)
+    # Remove vector index if present
+    vec_file = settings.data_dir / "vector_index" / f"{project_id}.json"
+    if vec_file.exists():
+        try:
+            vec_file.unlink()
+        except Exception:
+            pass
+    # Remove impact cache files for this project
+    impact_dir = settings.data_dir / "impact_cache"
+    if impact_dir.exists():
+        for path in impact_dir.glob(f"{project_id}_*.json"):
+            try:
+                path.unlink()
+            except Exception:
+                continue
 
 
 # Ticket helpers ------------------------------------------------------------

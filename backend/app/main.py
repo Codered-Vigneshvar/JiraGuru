@@ -108,7 +108,13 @@ def blocker_analysis_page(request: Request, project_id: str):
     return templates.TemplateResponse("blocker_analysis.html", {"request": request, "project_id": project_id})
 
 
-@app.get("/projects/{project_id}/impact", include_in_schema=False)
-def impact_placeholder_page(request: Request, project_id: str):
-    """Placeholder impact analysis page."""
-    return templates.TemplateResponse("impact_placeholder.html", {"request": request, "project_id": project_id})
+@app.get("/projects/{project_id}/alignment", include_in_schema=False)
+def project_alignment_page(request: Request, project_id: str):
+    """Serve the project alignment page."""
+    return templates.TemplateResponse("project_alignment.html", {"request": request, "project_id": project_id})
+
+
+@app.get("/projects/{project_id}/impacted-tickets", include_in_schema=False)
+def impacted_tickets_page(request: Request, project_id: str):
+    """Serve the impacted tickets generator page."""
+    return templates.TemplateResponse("impacted_tickets.html", {"request": request, "project_id": project_id})

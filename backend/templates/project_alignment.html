@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Project Alignment Check</title>
+  <style>
+    body { margin:0; font-family: "Inter", system-ui, -apple-system, sans-serif; background:#0f172a; color:#e2e8f0; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; background:#111827; border-bottom:1px solid #1f2937; }
+    main { max-width:1100px; margin:0 auto; padding:24px; display:flex; flex-direction:column; gap:16px; }
+    .card { background:#0f172a; border:1px solid #1f2937; border-radius:14px; padding:16px; box-shadow:0 14px 36px rgba(0,0,0,0.35); }
+    .muted { color:#94a3b8; }
+    button { padding:10px 14px; border:none; border-radius:10px; background:#38bdf8; color:#0b1221; font-weight:700; cursor:pointer; }
+    button.secondary { background:transparent; color:#e2e8f0; border:1px solid #334155; }
+    .conflict { border:1px solid #f87171; border-radius:8px; padding:10px; margin-bottom:10px; }
+    .badge { display:inline-block; padding:4px 8px; border-radius:8px; font-weight:700; }
+    .critical { background:#f87171; color:#0b1221; }
+    .warning { background:#fbbf24; color:#0b1221; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h2 style="margin:0;">Project Alignment</h2>
+      <div id="project-subtitle" class="muted">Checking...</div>
+    </div>
+    <div class="row" style="display:flex; gap:8px;">
+      <button id="rerun-btn">Re-run Check</button>
+      <a href="/projects/{{ project_id }}/view"><button class="secondary">Back to Project</button></a>
+    </div>
+  </header>
+  <main>
+    <div class="card">
+      <div id="status">Checking alignment...</div>
+      <div id="results"></div>
+    </div>
+  </main>
+
+  <div id="apply-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center; padding:20px;">
+    <div style="background:#0f172a; border:1px solid #1f2937; border-radius:12px; padding:16px; max-width:900px; width:100%; max-height:80vh; overflow:auto; box-shadow:0 14px 36px rgba(0,0,0,0.35);">
+      <h3 style="margin-top:0;">Apply Suggested Line</h3>
+      <p class="muted">Review the text below. Click "Apply & Copy" to apply the fix automatically and rerun the check. No page switch is needed.</p>
+      <textarea id="apply-text" rows="8" style="width:100%; background:#0b162a; color:#e2e8f0; border:1px solid #1f2937; border-radius:10px; padding:10px;"></textarea>
+      <div id="apply-status" class="muted" style="margin-top:6px;"></div>
+      <div style="margin-top:10px; display:flex; gap:8px; justify-content:flex-end;">
+        <button class="secondary" type="button" id="apply-close">Close</button>
+        <button type="button" id="apply-copy">Apply & Copy</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const projectId = "{{ project_id }}";
+    const currentUser = localStorage.getItem('currentUser');
+    if (!currentUser) window.location.href = '/';
+
+    const statusEl = document.getElementById('status');
+    const resultsEl = document.getElementById('results');
+    const rerunBtn = document.getElementById('rerun-btn');
+    const subtitle = document.getElementById('project-subtitle');
+    const applyModal = document.getElementById('apply-modal');
+    const applyText = document.getElementById('apply-text');
+    const applyClose = document.getElementById('apply-close');
+    const applyCopy = document.getElementById('apply-copy');
+    const applyStatus = document.getElementById('apply-status');
+    async function fetchAlignment() {
+      statusEl.textContent = 'Checking alignment...';
+      resultsEl.innerHTML = '';
+      rerunBtn.disabled = true;
+      try {
+        const projectRes = await fetch(`/api/projects/${projectId}`, { headers: { 'X-User': currentUser || '' } });
+        if (projectRes.ok) {
+          const proj = await projectRes.json();
+          subtitle.textContent = `${proj.code} — ${proj.title}`;
+        }
+        const res = await fetch(`/api/projects/${projectId}/check-alignment`, {
+          method: 'POST',
+          headers: { 'X-User': currentUser || '' },
+        });
+        if (!res.ok) throw new Error('Alignment check failed');
+        const data = await res.json();
+        renderResults(data);
+        statusEl.textContent = 'Alignment check complete.';
+      } catch (err) {
+        statusEl.textContent = 'Unable to complete alignment check. Please try again.';
+      } finally {
+        rerunBtn.disabled = false;
+      }
+    }
+
+    function renderResults(data) {
+      const conflicts = data.conflicts || [];
+      if (!data.has_conflict || !conflicts.length) {
+        resultsEl.innerHTML = '<div class="muted">Project alignment OK. No conflicts detected.</div>';
+        return;
+      }
+      const html = conflicts.map((c, idx) => {
+        const sev = (c.severity || 'warning').toLowerCase();
+        const f1 = c.file_1 || {};
+        const f2 = c.file_2 || {};
+        const fmt = (f) => `
+          <div style="margin-top:4px;">
+            <strong>${(f.type || '').toUpperCase() || 'ITEM'}</strong> — ${f.id || f.path || 'unknown'}
+            ${f.section_label ? `<div class="muted">Section: ${f.section_label}</div>` : ''}
+            ${f.section_start_marker ? `<div class="muted">Highlight: ${f.section_start_marker}${f.section_end_marker ? ' … ' + f.section_end_marker : ''}</div>` : ''}
+          </div>
+        `;
+        const buildHref = (f) => {
+          const raw = (f.id || f.path || '').split('?')[0];
+          const isSpec = f.type === 'spec' || raw.includes('requirements/plan');
+          const looksLikeTicket = /^[A-Z]+-[A-Z0-9]+/.test(raw);
+          if (isSpec) return `/projects/${projectId}/view`;
+          if (looksLikeTicket) return `/tickets/${projectId}/${raw}`;
+          return '#';
+        };
+        const href1 = buildHref(f1);
+        const href2 = buildHref(f2);
+        const line1 = f1.section_start_marker || f1.section_label || (f1.id || f1.path || '');
+        const line2 = f2.section_start_marker || f2.section_label || (f2.id || f2.path || '');
+        return `
+          <div class="conflict">
+            <div class="badge ${sev === 'critical' ? 'critical' : 'warning'}">${sev}</div>
+            <div style="margin-top:6px;"><strong>${c.description || ''}</strong></div>
+            <div style="margin-top:8px;">Review the following items:</div>
+            ${fmt(f1)}
+            ${fmt(f2)}
+            <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+              <button type="button" class="secondary" onclick="openApplyModal('${encodeURIComponent(line1)}','${f1.type || ''}','${f1.id || f1.path || ''}','${f1.section_label || ''}')">Apply line from item 1</button>
+              <button type="button" class="secondary" onclick="openApplyModal('${encodeURIComponent(line2)}','${f2.type || ''}','${f2.id || f2.path || ''}','${f2.section_label || ''}')">Apply line from item 2</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+      resultsEl.innerHTML = html;
+    }
+
+    rerunBtn.addEventListener('click', fetchAlignment);
+
+    window.openApplyModal = (encodedText, targetType, targetId, sectionLabel) => {
+      const text = decodeURIComponent(encodedText);
+      applyText.value = text;
+      applyModal.style.display = 'flex';
+      applyModal.dataset.targetType = targetType || '';
+      applyModal.dataset.targetId = targetId || '';
+      applyModal.dataset.sectionLabel = sectionLabel || '';
+    };
+    applyClose.addEventListener('click', () => {
+      applyModal.style.display = 'none';
+    });
+    applyModal.addEventListener('click', (e) => { if (e.target === applyModal) applyModal.style.display = 'none'; });
+    applyCopy.addEventListener('click', async () => {
+      const text = applyText.value || '';
+      const targetType = applyModal.dataset.targetType || '';
+      const targetId = applyModal.dataset.targetId || '';
+      const sectionLabel = applyModal.dataset.sectionLabel || '';
+      applyStatus.textContent = 'Applying...';
+      try {
+        const res = await fetch(`/api/projects/${projectId}/apply_alignment`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-User': currentUser || '',
+          },
+          body: JSON.stringify({ target: targetId, target_type: targetType, section_label: sectionLabel, content: text }),
+        });
+        if (!res.ok) throw new Error('Apply failed');
+        applyStatus.textContent = 'Applied. Rechecking...';
+      } catch (err) {
+        applyStatus.textContent = 'Apply failed. Please paste manually.';
+        return;
+      }
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).catch(() => {});
+      }
+      applyModal.style.display = 'none';
+      fetchAlignment();
+    });
+
+    // Always run a fresh alignment check on load
+    fetchAlignment();
+  </script>
+</body>
+</html>

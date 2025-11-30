@@ -40,7 +40,8 @@
       <a href="/projects/{{ project_id }}/board"><button type="button">Open Board</button></a>
       <a href="/projects/{{ project_id }}/health"><button type="button">View Health Report</button></a>
       <a href="/projects/{{ project_id }}/blockers"><button type="button">Blocker Analysis</button></a>
-      <a href="/projects/{{ project_id }}/impact"><button type="button">AI Impact Analysis</button></a>
+      <a href="/projects/{{ project_id }}/impacted-tickets"><button type="button">Generate Impact Analysis</button></a>
+      <a href="/projects/{{ project_id }}/alignment"><button type="button">Check Project Alignment</button></a>
     </div>
   </header>
   <main>
@@ -108,7 +109,8 @@
 
     async function loadProject() {
       const res = await fetch(`/api/projects/${projectId}`, {
-        headers: { 'X-User': currentUser }
+        headers: { 'X-User': currentUser },
+        cache: 'no-store'
       });
       const container = document.getElementById('project-container');
       if (!res.ok) {
@@ -274,18 +276,31 @@
           loadProject();
         };
       }
-    }
-
-    async function renderPlan() {
-      const planRes = await fetch(`/api/projects/${projectId}/requirements/plan`, {
-        headers: { 'X-User': currentUser }
-      });
-      const planData = await planRes.json();
-      const versionsRes = await fetch(`/api/projects/${projectId}/requirements/plan/versions`, {
-        headers: { 'X-User': currentUser }
-      }).then(r => r.json()).catch(() => ({ versions: [] }));
-      const versions = versionsRes.versions || [];
-      const latestText = planData.content || '';
+  }
+  
+  async function renderPlan() {
+      let planData = { content: '', updated_at: null };
+      let versions = [];
+      try {
+        const planRes = await fetch(`/api/projects/${projectId}/requirements/plan`, {
+          headers: { 'X-User': currentUser },
+          cache: 'no-store'
+        });
+        if (planRes.ok) {
+          planData = await planRes.json();
+        }
+        const versionsRes = await fetch(`/api/projects/${projectId}/requirements/plan/versions`, {
+          headers: { 'X-User': currentUser },
+          cache: 'no-store'
+        }).then(r => r.json()).catch(() => ({ versions: [] }));
+        versions = versionsRes.versions || [];
+      } catch (err) {
+        planData = { content: '', updated_at: null };
+        versions = [];
+      }
+      const latestVersion = versions.length ? versions[versions.length - 1] : null;
+      const latestText = (latestVersion && latestVersion.content) || planData.content || '';
+      const latestUpdated = (latestVersion && latestVersion.saved_at) || planData.updated_at;
       const historyList = versions.slice().reverse().map((v, idx) => {
         const label = v.saved_at || `Version ${versions.length - idx}`;
         const preview = (v.content || '').slice(0, 120) + ((v.content || '').length > 120 ? '...' : '');
@@ -293,8 +308,8 @@
       }).join('');
       document.getElementById('plan-container').innerHTML = `
         <h3>Requirements Plan</h3>
-        <p class="muted">${planData.updated_at ? 'Last updated: ' + planData.updated_at : 'Not saved yet.'}</p>
-        <textarea id="plan-text" rows="6" style="width:100%; background:#0b162a; color:#e2e8f0; border:1px solid #334155; border-radius:8px; padding:10px;">${latestText}</textarea>
+        <p class="muted">${latestUpdated ? 'Last updated: ' + latestUpdated : 'Not saved yet.'}</p>
+        <textarea id="plan-text" rows="10" style="width:100%; background:#0b162a; color:#e2e8f0; border:1px solid #334155; border-radius:8px; padding:10px; white-space:pre-wrap; word-break:break-word; min-height:220px; max-height:420px; overflow:auto; resize:vertical;"></textarea>
         <div style="margin-top:8px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
           <button id="plan-save-btn">Save Plan</button>
           <span id="plan-save-status" class="muted"></span>
@@ -302,6 +317,8 @@
         <h4>History</h4>
         ${versions.length ? `<ul id="plan-history" style="list-style:none; padding-left:0;">${historyList}</ul>` : '<p class="muted">No versions yet.</p>'}
       `;
+      const planTextArea = document.getElementById('plan-text');
+      planTextArea.value = latestText || '';
       document.getElementById('plan-save-btn').onclick = savePlan;
       document.querySelectorAll('.plan-version-btn').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -319,21 +336,47 @@
       const statusEl = document.getElementById('plan-save-status');
       statusEl.textContent = 'Saving...';
       try {
-        await fetch(`/api/projects/${projectId}/requirements/plan`, {
+        const res = await fetch(`/api/projects/${projectId}/requirements/plan`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'X-User': currentUser
           },
           body: JSON.stringify({ content })
-        }).then(r => {
-          if (!r.ok) throw new Error('Save failed');
-          return r.json();
         });
+        if (res.status === 409) {
+          const data = await res.json();
+          statusEl.innerHTML = `Conflicts detected. Please resolve:<br>${(data.conflicts || []).map(c => `<div>${c.description || ''}</div>`).join('')}`;
+          return;
+        }
+        if (!res.ok) throw new Error('Save failed');
+        await res.json();
         statusEl.textContent = 'Saved.';
         renderPlan();
       } catch (err) {
         statusEl.textContent = 'Save failed.';
+      }
+    }
+
+    function applyHighlightToPlan() {
+      const params = new URLSearchParams(window.location.search);
+      const hl = params.get('highlight');
+      const pendingPaste = (() => {
+        try { return localStorage.getItem('pending_paste_text'); } catch (e) { return null; }
+      })();
+      if (!hl) return;
+      const textarea = document.getElementById('plan-text');
+      const idx = textarea.value.indexOf(hl);
+      if (idx !== -1) {
+        textarea.focus();
+        textarea.setSelectionRange(idx, idx + hl.length);
+        textarea.scrollTop = textarea.scrollHeight * (idx / textarea.value.length);
+        if (pendingPaste) {
+          const before = textarea.value.slice(0, idx);
+          const after = textarea.value.slice(idx + hl.length);
+          textarea.value = `${before}${pendingPaste}${after}`;
+          try { localStorage.removeItem('pending_paste_text'); } catch (e) {}
+        }
       }
     }
 
@@ -415,10 +458,28 @@
       }
     }
 
-    chatSendGeneral.addEventListener('click', sendGeneralChat);
-    chatInputGeneral.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendGeneralChat(); }});
-    planModalClose.addEventListener('click', () => { planModal.style.display = 'none'; });
-    planModal.addEventListener('click', (e) => { if (e.target === planModal) planModal.style.display = 'none'; });
-  </script>
+  chatSendGeneral.addEventListener('click', sendGeneralChat);
+  chatInputGeneral.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendGeneralChat(); }});
+  planModalClose.addEventListener('click', () => { planModal.style.display = 'none'; });
+  planModal.addEventListener('click', (e) => { if (e.target === planModal) planModal.style.display = 'none'; });
+  applyHighlightToPlan();
+
+    function refreshProjectView() {
+      loadProject();
+      loadUsers();
+    }
+    refreshProjectView();
+    window.addEventListener('focus', refreshProjectView);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        refreshProjectView();
+      }
+    });
+    window.addEventListener('pageshow', (e) => {
+      if (e.persisted || document.visibilityState === 'visible') {
+        refreshProjectView();
+      }
+    });
+</script>
 </body>
 </html>

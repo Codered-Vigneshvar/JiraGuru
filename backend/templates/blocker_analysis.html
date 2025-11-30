@@ -49,39 +49,79 @@
     function renderChains(data) {
       document.getElementById('project-label').textContent = data.project_code || projectId;
       const container = document.getElementById('chains-container');
+      const depsView = data.dependency_view || [];
+      if (depsView.length) {
+        container.innerHTML = depsView.map(entry => {
+          const deps = entry.dependencies.map(d => `<li>${d.ticket_key}${d.title ? ' — ' + d.title : ''}${d.status ? ' (' + d.status + ')' : ''}</li>`).join('');
+          return `
+            <div class="card root" style="border-color:#334155;">
+              <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap;">
+                <div>
+                  <div><strong>${entry.ticket_key}</strong> — ${entry.title}</div>
+                  <div class="muted" style="margin-top:4px;">These dependencies must finish before this ticket can proceed.</div>
+                </div>
+                ${statusBadge(entry.status || 'TODO')}
+              </div>
+              <div style="margin-top:10px;">
+                <div class="muted" style="margin-bottom:4px;">Dependency tickets</div>
+                <ul style="margin:0; padding-left:18px;">${deps}</ul>
+              </div>
+            </div>
+          `;
+        }).join('');
+        return;
+      }
+
       if (!data.chains || !data.chains.length) {
         container.innerHTML = '<p>No blockers detected 🎉</p>';
         return;
       }
 
-      container.innerHTML = data.chains.map(chain => {
-        const list = chain.affected_tickets
-          .map(t => `
-            <tr>
-              <td>${t.ticket_key}</td>
-              <td>${t.title}</td>
-              <td>${statusBadge(t.status || 'TODO')}</td>
-              <td>${t.distance}</td>
-            </tr>
-          `).join('');
-        const blockersText = chain.root_blockers_text && chain.root_blockers_text.trim()
-          ? chain.root_blockers_text
-          : 'No explicit blockers text.';
+      const entriesMap = new Map();
+      data.chains.forEach(chain => {
+        if (chain.root_dependencies && chain.root_dependencies.length) {
+          entriesMap.set(chain.root_ticket_key, {
+            ticket_key: chain.root_ticket_key,
+            title: chain.root_title,
+            status: chain.root_status,
+            dependencies: chain.root_dependencies
+          });
+        }
+        (chain.affected_tickets || []).forEach(t => {
+          if (t.dependencies && t.dependencies.length) {
+            entriesMap.set(t.ticket_key, {
+              ticket_key: t.ticket_key,
+              title: t.title,
+              status: t.status,
+              dependencies: t.dependencies
+            });
+          }
+        });
+      });
+
+      const entries = Array.from(entriesMap.values());
+      if (!entries.length) {
+        container.innerHTML = '<p class="muted">No tickets with recorded dependencies.</p>';
+        return;
+      }
+
+      container.innerHTML = entries.map(entry => {
+        const deps = entry.dependencies.map(d => {
+          return `<li>${d.ticket_key}${d.title ? ' — ' + d.title : ''}${d.status ? ' (' + d.status + ')' : ''}</li>`;
+        }).join('');
         return `
-          <div class="card root">
-            <div style="display:flex; justify-content:space-between; gap:12px; align-items:center;">
+          <div class="card root" style="border-color:#334155;">
+            <div style="display:flex; justify-content:space-between; gap:12px; align-items:center; flex-wrap:wrap;">
               <div>
-                <div><strong>${chain.root_ticket_key}</strong> — ${chain.root_title}</div>
-                <div class="muted" style="margin-top:4px;">${blockersText}</div>
+                <div><strong>${entry.ticket_key}</strong> — ${entry.title}</div>
+                <div class="muted" style="margin-top:4px;">These dependencies must finish before this ticket can proceed.</div>
               </div>
-              ${statusBadge(chain.root_status || 'TODO')}
+              ${statusBadge(entry.status || 'TODO')}
             </div>
-            <table>
-              <thead>
-                <tr><th>Key</th><th>Title</th><th>Status</th><th>Distance</th></tr>
-              </thead>
-              <tbody>${list}</tbody>
-            </table>
+            <div style="margin-top:10px;">
+              <div class="muted" style="margin-bottom:4px;">Dependency tickets</div>
+              <ul style="margin:0; padding-left:18px;">${deps}</ul>
+            </div>
           </div>
         `;
       }).join('');

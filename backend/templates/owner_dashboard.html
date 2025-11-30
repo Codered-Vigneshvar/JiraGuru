@@ -17,6 +17,7 @@
     .list-item { padding: 10px; border: 1px solid #334155; border-radius: 8px; margin-bottom: 8px; background: #111827; }
     .muted { color: #94a3b8; }
     a { color: #38bdf8; text-decoration: none; }
+    .modal { display:flex; }
   </style>
 </head>
 <body>
@@ -60,8 +61,9 @@
         </div>
         <div class="muted" style="margin-bottom:8px;">Selected members:</div>
         <div id="selected-members" class="list-item" style="background:#0b162a;">Loading...</div>
-        <label for="project-file">Attach document (optional)</label>
-        <input id="project-file" type="file" />
+        <label>Attach documents (optional)</label>
+        <button type="button" id="open-upload-modal">Upload files</button>
+        <div id="selected-files" class="muted" style="margin-top:6px;">No files selected.</div>
         <button type="submit">Create Project</button>
       </form>
       <div id="project-form-status" class="muted"></div>
@@ -76,13 +78,34 @@
       <h2>Projects</h2>
       <div id="projects-list"></div>
     </section>
-  </main>
+</main>
+
+  <div id="upload-modal" class="modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); align-items:center; justify-content:center; padding:20px; z-index:1000;">
+    <div class="modal-content" style="background:#0f172a; border:1px solid #1f2937; border-radius:12px; padding:16px; max-width:620px; width:100%; box-shadow:0 10px 32px rgba(0,0,0,0.45);">
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+        <h3 style="margin:0;">Upload Documents</h3>
+        <button type="button" id="close-upload-modal" class="secondary">Close</button>
+      </div>
+      <div id="drop-area" style="margin-top:12px; padding:18px; border:2px dashed #334155; border-radius:10px; background:#0b162a; text-align:center; cursor:pointer;">
+        <p style="margin:0;">Drag & drop files here or click to browse</p>
+        <input id="project-file" type="file" multiple style="display:none;" />
+      </div>
+      <div id="file-list" class="muted" style="margin-top:10px;">No files selected.</div>
+      <div style="margin-top:12px; display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap;">
+        <button type="button" class="secondary" id="clear-files">Clear</button>
+        <button type="button" id="save-files">Save uploads</button>
+      </div>
+      <div id="upload-status" class="muted" style="margin-top:6px;"></div>
+    </div>
+  </div>
 
   <script>
     const currentUser = localStorage.getItem('currentUser');
     if (currentUser !== 'Vignesh') {
       window.location.href = '/';
     }
+
+    let pendingFiles = [];
 
     function logout() {
       localStorage.removeItem('currentUser');
@@ -95,6 +118,7 @@
       options.headers = headers;
       const res = await fetch(url, options);
       if (!res.ok) throw new Error(`Request failed (${res.status})`);
+      if (res.status === 204) return null;
       return res.json();
     }
 
@@ -122,13 +146,29 @@
         }
         container.innerHTML = data.map(u => `
           <div class="list-item">
-            <strong>${u.username}</strong> ${u.is_owner ? '(Owner)' : ''}
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+              <div><strong>${u.username}</strong> ${u.is_owner ? '(Owner)' : ''}</div>
+              ${u.is_owner ? '' : `<button class="delete-user" data-username="${u.username}" style="padding:6px 10px;">Delete</button>`}
+            </div>
           </div>
         `).join('');
         memberSelect.innerHTML = data.map(u => `
           <option value="${u.username}">${u.username}${u.is_owner ? ' (Owner)' : ''}</option>
         `).join('');
         renderSelectedMembers();
+        document.querySelectorAll('.delete-user').forEach(btn => {
+          btn.addEventListener('click', async (e) => {
+            const uname = e.target.getAttribute('data-username');
+            if (!confirm(`Delete user ${uname}?`)) return;
+            try {
+              await fetchJSON(`/api/users/${uname}`, { method: 'DELETE' });
+              loadUsers();
+              loadProjects();
+            } catch (err) {
+              alert('Failed to delete user.');
+            }
+          });
+        });
       } catch (err) {
         console.error(err);
       }
@@ -181,6 +221,7 @@
             try {
               await fetchJSON(`/api/projects/${id}`, { method: 'DELETE' });
               loadProjects();
+              window.location.reload();
             } catch (err) {
               alert('Failed to delete project.');
             }
@@ -194,12 +235,87 @@
     async function uploadDocument(projectId, file) {
       const formData = new FormData();
       formData.append('file', file);
-      await fetch(`/api/projects/${projectId}/documents`, {
-        method: 'POST',
-        headers: { 'X-User': localStorage.getItem('currentUser') || '' },
-        body: formData,
+      try {
+        await fetch(`/api/projects/${projectId}/documents`, {
+          method: 'POST',
+          headers: { 'X-User': localStorage.getItem('currentUser') || '' },
+          body: formData,
+        });
+      } catch (err) {
+        console.error('Upload failed for', file?.name, err);
+      }
+    }
+
+    // Upload modal handlers
+    const uploadModal = document.getElementById('upload-modal');
+    const openUploadModal = document.getElementById('open-upload-modal');
+    const closeUploadModal = document.getElementById('close-upload-modal');
+    const dropArea = document.getElementById('drop-area');
+    const fileInput = document.getElementById('project-file');
+    const fileList = document.getElementById('file-list');
+    const selectedFilesLabel = document.getElementById('selected-files');
+    const uploadStatus = document.getElementById('upload-status');
+    const clearFilesBtn = document.getElementById('clear-files');
+    const saveFilesBtn = document.getElementById('save-files');
+
+    function renderFileList() {
+      if (!pendingFiles.length) {
+        fileList.textContent = 'No files selected.';
+        selectedFilesLabel.textContent = 'No files selected.';
+        return;
+      }
+      const rows = pendingFiles.map((f, idx) => `
+        <div style="display:flex; justify-content:space-between; gap:8px; align-items:center; margin-top:4px;">
+          <span>${f.name}</span>
+          <button type="button" data-idx="${idx}" class="secondary" style="padding:4px 8px;">Remove</button>
+        </div>
+      `).join('');
+      fileList.innerHTML = rows;
+      selectedFilesLabel.textContent = `${pendingFiles.length} file(s) selected.`;
+      fileList.querySelectorAll('button[data-idx]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const idx = Number(btn.getAttribute('data-idx'));
+          pendingFiles.splice(idx, 1);
+          renderFileList();
+        });
       });
     }
+
+    openUploadModal.addEventListener('click', () => {
+      uploadModal.style.display = 'flex';
+      renderFileList();
+    });
+    closeUploadModal.addEventListener('click', () => {
+      uploadModal.style.display = 'none';
+    });
+    uploadModal.addEventListener('click', (e) => {
+      if (e.target === uploadModal) uploadModal.style.display = 'none';
+    });
+
+    dropArea.addEventListener('click', () => fileInput.click());
+    dropArea.addEventListener('dragover', (e) => { e.preventDefault(); dropArea.style.borderColor = '#38bdf8'; });
+    dropArea.addEventListener('dragleave', (e) => { e.preventDefault(); dropArea.style.borderColor = '#334155'; });
+    dropArea.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropArea.style.borderColor = '#334155';
+      const files = Array.from(e.dataTransfer.files || []);
+      pendingFiles.push(...files);
+      renderFileList();
+    });
+    fileInput.addEventListener('change', (e) => {
+      const files = Array.from(e.target.files || []);
+      pendingFiles.push(...files);
+      renderFileList();
+    });
+    clearFilesBtn.addEventListener('click', () => {
+      pendingFiles = [];
+      renderFileList();
+      uploadStatus.textContent = '';
+    });
+    saveFilesBtn.addEventListener('click', () => {
+      uploadStatus.textContent = pendingFiles.length ? `${pendingFiles.length} file(s) ready. They will upload when you create the project.` : 'No files selected.';
+      uploadModal.style.display = 'none';
+    });
 
     document.getElementById('project-form').addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -212,15 +328,20 @@
         description: document.getElementById('description').value.trim(),
         member_usernames: members,
       };
+      let created = false;
       try {
         const project = await fetchJSON('/api/projects', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
         });
-        const fileInput = document.getElementById('project-file');
-        if (fileInput.files.length) {
-          await uploadDocument(project.id, fileInput.files[0]);
+        created = true;
+        if (pendingFiles.length) {
+          for (const f of pendingFiles) {
+            await uploadDocument(project.id, f);
+          }
+          pendingFiles = [];
+          renderFileList();
         }
         statusEl.textContent = 'Project created.';
         e.target.reset();
@@ -229,6 +350,10 @@
         loadProjects();
       } catch (err) {
         statusEl.textContent = 'Failed to create project.';
+      } finally {
+        if (created) {
+          window.location.reload();
+        }
       }
     });
 

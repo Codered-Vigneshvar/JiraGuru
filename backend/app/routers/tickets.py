@@ -27,6 +27,7 @@ from ..storage import (
     save_ticket_comments,
     save_project_plan,
     load_plan_versions,
+    append_change_entry,
 )
 from fastapi.responses import FileResponse
 from pathlib import Path
@@ -227,6 +228,10 @@ def delete_ticket(project_id: str, ticket_key: str, x_user: str | None = Header(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Ticket not found.")
     proj_dict["tickets"] = filtered
     _persist_project_dict(project_id, proj_dict)
+    try:
+        ProjectIndex(project_id).delete_ticket(ticket_key)
+    except Exception:
+        pass
 
 
 @router.delete("/tickets", status_code=status.HTTP_204_NO_CONTENT)
@@ -238,6 +243,12 @@ def clear_tickets(project_id: str, x_user: str | None = Header(default=None, ali
     proj_dict = project.model_dump()
     proj_dict["tickets"] = []
     _persist_project_dict(project_id, proj_dict)
+    try:
+        index = ProjectIndex(project_id)
+        for t in project.tickets or []:
+            index.delete_ticket(t.key)
+    except Exception:
+        pass
 
 
 @router.get("/requirements/plan", response_model=RequirementPlan | dict)
@@ -249,10 +260,13 @@ def get_requirements_plan(project_id: str, x_user: str | None = Header(default=N
     project_dict = project.model_dump()
     if "requirements_plan" not in project_dict:
         return {"project_id": project_id, "content": "", "updated_at": None}
+    updated_raw = project_dict.get("requirements_plan_updated_at")
+    content = project_dict.get("requirements_plan") or ""
+    updated_at = datetime.fromisoformat(updated_raw) if updated_raw else datetime.utcnow()
     return RequirementPlan(
         project_id=project_id,
-        content=project_dict.get("requirements_plan", ""),
-        updated_at=datetime.fromisoformat(project_dict.get("requirements_plan_updated_at")),
+        content=content,
+        updated_at=updated_at,
     )
 
 
@@ -267,7 +281,10 @@ def save_requirements_plan(
     project = _get_project_model(project_id)
     _assert_member(project, user)
     content = payload.get("content", "")
+    prev_content = project.model_dump().get("requirements_plan", "") or ""
     updated_project = save_project_plan(project_id, content)
+    if content != prev_content:
+        append_change_entry(project_id, "requirements_plan", prev_content, content, user.get("username"))
     return RequirementPlan(
         project_id=project_id,
         content=updated_project.get("requirements_plan", ""),
@@ -296,8 +313,11 @@ def generate_requirements_plan(
     project = _get_project_model(project_id)
     _assert_member(project, user)
     requirements = (payload or {}).get("requirements") if payload else None
+    prev_content = project.model_dump().get("requirements_plan", "") or ""
     plan_text = generate_plan_for_project(project, requirements=requirements)
     updated_project = save_project_plan(project_id, plan_text)
+    if plan_text != prev_content:
+        append_change_entry(project_id, "requirements_plan", prev_content, plan_text, user.get("username"))
     return RequirementPlan(
         project_id=project_id,
         content=plan_text,

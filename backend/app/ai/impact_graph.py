@@ -19,6 +19,11 @@ class ImpactState(TypedDict, total=False):
     project_id: str
     doc_id: str
     doc_text: str
+    project_title: str
+    project_description: str
+    delta_text: str
+    old_doc_text: str
+    all_tickets: List[Dict[str, Any]]
     candidates: List[Dict[str, Any]]
     scored_tickets: List[Dict[str, Any]]
     report: str
@@ -52,7 +57,9 @@ def _load_doc_text(project_id: str, doc_id: str) -> str:
 def load_doc_and_context(state: ImpactState) -> ImpactState:
     project_id = state["project_id"]
     doc_id = state["doc_id"]
-    text = _load_doc_text(project_id, doc_id)
+    text = state.get("doc_text")
+    if text is None:
+        text = _load_doc_text(project_id, doc_id)
     index = ProjectIndex(project_id)
     index.ensure_built_full()
     project = get_project_by_id(project_id)
@@ -61,15 +68,18 @@ def load_doc_and_context(state: ImpactState) -> ImpactState:
     state["project_title"] = proj_title
     state["project_description"] = proj_desc
     state["doc_text"] = text
+    state["all_tickets"] = project.get("tickets", [])
     return state
 
 
 def retrieve_candidate_tickets(state: ImpactState) -> ImpactState:
     project_id = state["project_id"]
     text = state.get("doc_text") or ""
-    query = f"{state.get('project_title','')} {state.get('project_description','')}\n{text}"
+    delta = state.get("delta_text") or ""
+    focus = delta if delta.strip() else text
+    query = f"{state.get('project_title','')} {state.get('project_description','')}\n{focus}"
     index = ProjectIndex(project_id)
-    hits = index.search_tickets(query, k=30)
+    hits = index.search_tickets(query, k=15)
     candidates: List[Dict[str, Any]] = []
     for hit in hits:
         meta = hit.get("metadata") or {}
@@ -90,13 +100,17 @@ def retrieve_candidate_tickets(state: ImpactState) -> ImpactState:
 def _classify_impact(doc_text: str, candidate: Dict[str, Any]) -> Dict[str, str]:
     _configure_gemini()
     model = genai.GenerativeModel(settings.gemini_model or "models/gemini-2.5-flash")
+    request_options = {"timeout": 20}
     prompt = f"""
-You are an expert project analyst. Assess the impact of the provided document update on the ticket.
-Return ONLY a strict JSON object with fields: impact_level (HIGH|MEDIUM|LOW|NONE) and reason. No other text.
-Base impact on how the document changes affect the ticket's scope, dependencies, or acceptance criteria.
-Always consider project title, project description, and retrieved ticket context below.
+You are an expert project analyst. Decide if the document CHANGES materially impact this ticket. If not, return NONE.
+Rules:
+- Only return HIGH/MEDIUM/LOW when the change alters the ticket's scope, acceptance criteria, dependencies, blockers, or delivery risk.
+- If the change is general context or unrelated, return NONE.
+- Be concise and specific in the reason; cite the change that drives the impact.
 
-Document (truncated):
+Return ONLY strict JSON: {{"impact_level": "HIGH|MEDIUM|LOW|NONE", "reason": "<short sentence>"}}. No other text.
+
+Change (truncated):
 {doc_text[:3000]}
 
 Ticket:
@@ -107,8 +121,12 @@ Epic: {candidate.get("epic_key")}
 Content:
 {candidate.get("content")}
 """
-    response = model.generate_content(prompt)
-    raw = response.text or ""
+    try:
+        response = model.generate_content(prompt, request_options=request_options)
+        raw = response.text or ""
+    except Exception as exc:
+        log_ai_event(f"[Impact Score Error] {candidate.get('ticket_key')}: {exc}")
+        return {"impact_level": "NONE", "reason": "LLM unavailable; defaulting to no impact."}
     log_ai_event(f"[Impact Score] {candidate.get('ticket_key')} | {raw}")
     variants = [raw, raw.replace("'", '"')]
     # Try to extract JSON object from within text
@@ -130,8 +148,10 @@ Content:
 
 
 def ai_score_impact(state: ImpactState) -> ImpactState:
-    doc_text = state.get("doc_text", "")
+    doc_text = state.get("delta_text") or state.get("doc_text", "")
     candidates = state.get("candidates") or []
+    all_tickets = state.get("all_tickets") or []
+    ticket_lookup = {t.get("key"): t for t in all_tickets if isinstance(t, dict) and t.get("key")}
     scored: List[Dict[str, Any]] = []
     for cand in candidates:
         res = _classify_impact(doc_text, cand)
@@ -139,6 +159,43 @@ def ai_score_impact(state: ImpactState) -> ImpactState:
         reason = res.get("reason", "")
         record = {**cand, "impact_level": impact_level, "reason": reason}
         scored.append(record)
+
+    # Filter out weak matches before dependency expansion
+    min_score = 0.35
+    scored = [
+        s
+        for s in scored
+        if s.get("impact_level") in {"HIGH", "MEDIUM"}
+        or (s.get("impact_level") == "LOW" and (s.get("raw_score") or 0) >= min_score)
+    ]
+
+    # Pull in dependency stories for impacted tickets (one hop) with inherited impact
+    scored_by_key = {s.get("ticket_key"): s for s in scored if s.get("ticket_key")}
+    for ticket_key, ticket in list(scored_by_key.items()):
+        deps = (ticket_lookup.get(ticket_key, {}).get("dependencies") or [])
+        for dep_key in deps:
+            if dep_key in scored_by_key:
+                continue
+            dep_ticket = ticket_lookup.get(dep_key)
+            if not dep_ticket:
+                continue
+            dep_record = {
+                "ticket_key": dep_ticket.get("key"),
+                "title": dep_ticket.get("title"),
+                "status": dep_ticket.get("status"),
+                "epic_key": dep_ticket.get("epic_key"),
+                "raw_score": 0,
+                "content": dep_ticket.get("description"),
+                "impact_level": ticket.get("impact_level", "LOW"),
+                "reason": (
+                    f"Dependency of impacted ticket {ticket_key} ({ticket.get('title')}); "
+                    f"keep this aligned with the upstream change."
+                ),
+                "dependency_of": ticket_key,
+            }
+            scored.append(dep_record)
+            scored_by_key[dep_key] = dep_record
+
     # If all were NONE, keep top few as LOW to avoid empty result
     if scored and all(item["impact_level"] == "NONE" for item in scored):
         for item in scored[:5]:
@@ -148,6 +205,9 @@ def ai_score_impact(state: ImpactState) -> ImpactState:
         scored = [s for s in scored if s["impact_level"] != "NONE"]
     priority = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
     scored.sort(key=lambda x: (-priority.get(x.get("impact_level", ""), 0), x.get("raw_score", 0)))
+    # Cap the list to avoid returning everything; keep strongest matches
+    max_results = 10
+    scored = scored[:max_results]
     state["scored_tickets"] = scored
     return state
 
@@ -155,8 +215,9 @@ def ai_score_impact(state: ImpactState) -> ImpactState:
 def generate_impact_report(state: ImpactState) -> ImpactState:
     _configure_gemini()
     model = genai.GenerativeModel(settings.gemini_model or "models/gemini-2.5-flash")
+    request_options = {"timeout": 20}
     tickets = state.get("scored_tickets") or []
-    doc_text = state.get("doc_text", "")[:4000]
+    doc_text = (state.get("delta_text") or state.get("doc_text", ""))[:4000]
     project_title = state.get("project_title", "")
     project_desc = state.get("project_description", "")
     summary_payload = json.dumps(
@@ -192,8 +253,12 @@ Key Changes: Explain the main changes reflected in the impacted tickets.
 Impact on Project: Describe how these changes affect delivery, scope, or users.
 Next Steps: Plain-sentence actions to keep momentum.
 """
-    response = model.generate_content(prompt)
-    report_text = response.text or ""
+    try:
+        response = model.generate_content(prompt, request_options=request_options)
+        report_text = response.text or ""
+    except Exception as exc:
+        log_ai_event(f"[Impact Report Error] {exc}")
+        report_text = "LLM unavailable while generating report. Please retry."
     log_ai_event(f"[Impact Report] generated {len(tickets)} tickets")
     state["report"] = report_text
     return state

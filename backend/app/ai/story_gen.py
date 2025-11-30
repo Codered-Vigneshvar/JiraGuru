@@ -97,7 +97,7 @@ def _build_prompt(project: Project, content: str, plan: str | None = None) -> st
 }
 """.strip()
     return f"""
-You are a product manager creating execution-ready tickets. Based on the project documents and requirements plan, produce technical, actionable EPICs and STORIES.
+You are a product manager creating execution-ready tickets. Stay 100% within the project documents and requirements plan—do NOT invent features that are not explicitly mentioned or clearly implied. If something is unclear, add a TODO note instead of guessing. Only generate epics and stories that are directly supported by the provided sources.
 
 Project Code: {project.code}
 Project Title: {project.title}
@@ -113,7 +113,7 @@ Requirements for output:
 - Use the project code "{project.code}" when building ids (e.g. {project.code}-EP01, {project.code}-001).
 - Create as many epics and stories as needed; every EPIC must have multiple STORIES (at least 2) that it is split into.
 - Every story must reference a valid epic_id (tag each story to its EPIC).
-- Descriptions must be specific and technical (APIs, data flow, validation, edge cases, dependencies).
+- Descriptions must be specific, technical, and traceable to the documents/plan (APIs, data flow, validation, edge cases, dependencies). If a detail is missing, insert a TODO note rather than inventing.
 - acceptance_criteria must be a list of short, testable statements tied to functionality.
 """
 

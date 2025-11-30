@@ -71,8 +71,8 @@
         <ul id="unassigned-list" class="list"></ul>
       </div>
       <div class="card">
-        <h2>Blocked Tickets</h2>
-        <ul id="blocked-list" class="list"></ul>
+        <h2>Tickets Waiting on Dependencies</h2>
+        <ul id="deps-list" class="list"></ul>
       </div>
     </div>
   </main>
@@ -104,7 +104,7 @@
         document.getElementById('completion-text').textContent = `${completion}% completed`;
 
         renderList(document.getElementById('unassigned-list'), data.unassigned_tickets || []);
-        renderList(document.getElementById('blocked-list'), data.blocked_tickets || []);
+        renderList(document.getElementById('deps-list'), data.dependency_blocked_tickets || []);
 
         const statusCtx = document.getElementById('status-chart');
         const priorityCtx = document.getElementById('priority-chart');

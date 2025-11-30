@@ -32,9 +32,10 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
     """Embed texts using Gemini embeddings."""
     _configure_gemini()
     model_name = "models/text-embedding-004"
+    request_options = {"timeout": 8}
     vectors: List[List[float]] = []
     for text in texts:
-        resp = genai.embed_content(model=model_name, content=text or "")
+        resp = genai.embed_content(model=model_name, content=text or "", request_options=request_options)
         vectors.append(resp["embedding"])
     return vectors
 
@@ -92,13 +93,25 @@ def _ticket_text(ticket: Ticket) -> str:
         f"Description: {ticket.description}",
         f"Status: {ticket.status}",
         f"Epic: {ticket.epic_key or ''}",
+        f"Assignee: {ticket.assignee_username or 'Unassigned'}",
+        f"Priority: {getattr(ticket, 'priority', '') or 'MEDIUM'}",
+        f"Story Points: {getattr(ticket, 'story_points', '') or ''}",
     ]
+    if ticket.type:
+        parts.append(f"Type: {ticket.type}")
     if ticket.acceptance_criteria:
         parts.append("Acceptance Criteria: " + "; ".join(ticket.acceptance_criteria))
     if ticket.blockers:
         parts.append(f"Blockers: {ticket.blockers}")
     if ticket.dependencies:
         parts.append("Dependencies: " + ", ".join(ticket.dependencies))
+    if getattr(ticket, "linked_document_ids", None):
+        parts.append("Linked Documents: " + ", ".join(ticket.linked_document_ids))
+    if getattr(ticket, "comments", None):
+        try:
+            parts.append("Comments: " + "; ".join(ticket.comments))
+        except Exception:
+            pass
     return "\n".join(parts)
 
 
@@ -214,6 +227,11 @@ class ProjectIndex:
                     "status": ticket.status,
                     "epic_key": ticket.epic_key,
                     "title": ticket.title,
+                    "assignee_username": ticket.assignee_username,
+                    "priority": getattr(ticket, "priority", None),
+                    "story_points": getattr(ticket, "story_points", None),
+                    "dependencies": ticket.dependencies or [],
+                    "type": ticket.type,
                 },
                 "embedding": embedding,
                 "text": text,
@@ -237,11 +255,19 @@ class ProjectIndex:
     def search_tickets(self, query_text: str, k: int = 20) -> List[Dict]:
         if not query_text:
             return []
+        # Auto-build if missing/empty so queries always reflect current project
+        try:
+            self.ensure_built_full()
+        except Exception:
+            pass
         data = self.store.load()
         items = [itm for itm in data.get("items", []) if itm.get("type") == "ticket"]
         if not items:
             return []
-        query_vec = embed_texts([query_text])[0]
+        try:
+            query_vec = embed_texts([query_text])[0]
+        except Exception:
+            return []
         scored: List[Dict] = []
         for itm in items:
             emb = itm.get("embedding") or []

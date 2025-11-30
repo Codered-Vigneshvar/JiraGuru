@@ -55,6 +55,11 @@
         </select>
         <label for="dependencies-select">Dependencies</label>
         <select id="dependencies-select" multiple size="6"></select>
+        <div style="margin-top:6px; display:flex; gap:8px; align-items:center;">
+          <button type="button" id="add-dependencies">Add Selected Dependencies</button>
+          <span class="muted" id="deps-note"></span>
+        </div>
+        <div id="dependencies-list" class="muted" style="margin-top:8px;"></div>
         <label for="acceptance-criteria">Acceptance Criteria (one per line)</label>
         <textarea id="acceptance-criteria" rows="3"></textarea>
         <button type="submit">Save</button>
@@ -86,6 +91,7 @@
     const ticketKey = "{{ ticket_key }}";
     const currentUser = localStorage.getItem('currentUser');
     let allProjectTickets = [];
+    let dependencyList = [];
     if (!currentUser) {
       window.location.href = '/';
     }
@@ -120,6 +126,7 @@
 
     function renderTicket(t) {
       const card = document.getElementById('ticket-card');
+      const depsList = renderDepsDetailed(t.dependencies || []);
       card.innerHTML = `
         <h2>${t.key} — ${t.title}</h2>
         <p class="muted">${t.description}</p>
@@ -131,11 +138,7 @@
         <p>Epic: ${t.epic_key || '-'}</p>
         <div>
           <h4>Dependencies</h4>
-          ${
-            t.dependencies && t.dependencies.length
-              ? `<ul>${t.dependencies.map(dep => `<li><a href="/tickets/${projectId}/${dep}">${dep}</a></li>`).join('')}</ul>`
-              : '<p class="muted">None</p>'
-          }
+          ${depsList}
         </div>
         <div>
           <h4>Acceptance Criteria</h4>
@@ -148,6 +151,44 @@
       `;
     }
 
+    function renderDepsDetailed(deps) {
+      if (!deps || !deps.length) return '<p class="muted">None</p>';
+      const rows = deps.map(dep => {
+        const match = allProjectTickets.find(tt => tt.key === dep);
+        const title = match ? match.title : '';
+        const status = match ? match.status : '';
+        return `<li><a href="/tickets/${projectId}/${dep}">${dep}${title ? ' — ' + title : ''}${status ? ' (' + status + ')' : ''}</a></li>`;
+      }).join('');
+      return `<ul>${rows}</ul>`;
+    }
+
+    function applyHighlight() {
+      const params = new URLSearchParams(window.location.search);
+      const hl = params.get('highlight');
+      const pendingPaste = (() => {
+        try { return localStorage.getItem('pending_paste_text'); } catch (e) { return null; }
+      })();
+      if (!hl) return;
+      const descArea = document.getElementById('description');
+      const acArea = document.getElementById('acceptance-criteria');
+      [descArea, acArea].forEach(area => {
+        const idx = area.value.indexOf(hl);
+        if (idx !== -1) {
+          area.focus();
+          area.setSelectionRange(idx, idx + hl.length);
+          area.scrollTop = area.scrollHeight * (idx / (area.value.length || 1));
+          if (pendingPaste) {
+            const before = area.value.slice(0, idx);
+            const after = area.value.slice(idx + hl.length);
+            area.value = `${before}${pendingPaste}${after}`;
+          }
+        }
+      });
+      if (pendingPaste) {
+        try { localStorage.removeItem('pending_paste_text'); } catch (e) {}
+      }
+    }
+
     function populateForm(t) {
       document.getElementById('title').value = t.title;
       document.getElementById('description').value = t.description;
@@ -155,31 +196,53 @@
       document.getElementById('priority').value = t.priority || 'MEDIUM';
       document.getElementById('story-points').value = t.story_points ?? '';
       document.getElementById('assignee').value = t.assignee_username || '';
-      document.getElementById('acceptance-criteria').value = (t.acceptance_criteria || []).join('\\n');
+      document.getElementById('acceptance-criteria').value = (t.acceptance_criteria || []).join('\n');
+      applyHighlight();
     }
 
     function populateDependencies(ticket, tickets) {
       const select = document.getElementById('dependencies-select');
       select.innerHTML = '';
-      const deps = ticket.dependencies || [];
+      const deps = (ticket.dependencies || []).filter(key => {
+        const match = tickets.find(t => t.key === key);
+        return !(match && match.status === 'DONE');
+      });
+      dependencyList = deps.slice();
+      renderDependencyList();
       tickets
         .filter(t => t.key !== ticket.key)
         .forEach(t => {
           const opt = document.createElement('option');
           opt.value = t.key;
           opt.textContent = `${t.key} — ${t.title}`;
-          if (deps.includes(t.key)) {
-            opt.selected = true;
-          }
           select.appendChild(opt);
         });
+      const removedDone = (ticket.dependencies || []).filter(key => !deps.includes(key));
+      const note = document.getElementById('deps-note');
+      note.textContent = removedDone.length ? 'Done dependencies were removed automatically.' : '';
+    }
+
+    function renderDependencyList() {
+      const container = document.getElementById('dependencies-list');
+      if (!dependencyList.length) {
+        container.innerHTML = '<p class="muted">No dependencies selected.</p>';
+        return;
+      }
+      container.innerHTML = dependencyList.map(key => {
+        const match = allProjectTickets.find(t => t.key === key);
+        const title = match ? match.title : '';
+        const status = match ? match.status : '';
+        return `<div style="display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:6px;">
+          <div>${key}${title ? ' — ' + title : ''}${status ? ' (' + status + ')' : ''}</div>
+          <button type="button" class="remove-dep" data-key="${key}" style="padding:6px 10px; background:#ef4444; color:#fff;">Remove</button>
+        </div>`;
+      }).join('');
     }
 
     document.getElementById('ticket-form').addEventListener('submit', async (e) => {
       e.preventDefault();
       const statusEl = document.getElementById('save-status');
       statusEl.textContent = 'Saving...';
-      const depsSelect = document.getElementById('dependencies-select');
       const payload = {
         title: document.getElementById('title').value,
         description: document.getElementById('description').value,
@@ -190,22 +253,50 @@
           return val === '' ? null : Number(val);
         })(),
         assignee_username: document.getElementById('assignee').value || null,
-        dependencies: Array.from(depsSelect.selectedOptions).map(o => o.value),
+        dependencies: dependencyList.slice(),
         acceptance_criteria: document.getElementById('acceptance-criteria').value
-          .split('\\n')
+          .split('\n')
           .map(x => x.trim())
           .filter(Boolean),
       };
       try {
-        const updated = await fetchJSON(`/api/projects/${projectId}/tickets/${ticketKey}`, {
+        const res = await fetch(`/api/projects/${projectId}/tickets/${ticketKey}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-User': currentUser || '' },
           body: JSON.stringify(payload),
         });
+        if (res.status === 409) {
+          const data = await res.json();
+          statusEl.innerHTML = `Conflicts detected. Please resolve:<br>${(data.conflicts || []).map(c => `<div>${c.description || ''}</div>`).join('')}`;
+          return;
+        }
+        if (!res.ok) throw new Error('Save failed');
+        const updated = await res.json();
         renderTicket(updated);
         statusEl.textContent = 'Saved.';
       } catch (err) {
         statusEl.textContent = 'Failed to save.';
+      }
+    });
+
+    document.getElementById('add-dependencies').addEventListener('click', () => {
+      const select = document.getElementById('dependencies-select');
+      const selected = Array.from(select.selectedOptions).map(o => o.value);
+      if (!selected.length) return;
+      selected.forEach(key => {
+        const match = allProjectTickets.find(t => t.key === key);
+        if (match && match.status === 'DONE') return;
+        if (!dependencyList.includes(key)) dependencyList.push(key);
+      });
+      select.selectedIndex = -1;
+      renderDependencyList();
+    });
+
+    document.getElementById('dependencies-list').addEventListener('click', (e) => {
+      if (e.target.classList.contains('remove-dep')) {
+        const key = e.target.getAttribute('data-key');
+        dependencyList = dependencyList.filter(k => k !== key);
+        renderDependencyList();
       }
     });
 

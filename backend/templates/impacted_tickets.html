@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Generate Impact Analysis - JiraGuru</title>
+  <style>
+    body { margin:0; font-family: "Inter", system-ui, -apple-system, sans-serif; background:#0b1221; color:#e2e8f0; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:16px 24px; background:#111827; border-bottom:1px solid #1f2937; }
+    main { max-width:1200px; margin:0 auto; padding:24px; display:flex; flex-direction:column; gap:16px; }
+    .card { background:#0f172a; border:1px solid #1f2937; border-radius:14px; padding:16px; box-shadow:0 14px 36px rgba(0,0,0,0.35); }
+    .muted { color:#94a3b8; }
+    label { display:block; margin-bottom:6px; font-weight:600; color:#cbd5e1; }
+    textarea { width:100%; min-height:140px; padding:12px; border-radius:10px; border:1px solid #1f2937; background:#0b162a; color:#e2e8f0; resize:vertical; }
+    input, select { width:100%; padding:10px; border-radius:8px; border:1px solid #1f2937; background:#0b162a; color:#e2e8f0; }
+    button { padding:10px 14px; border:none; border-radius:10px; background:#38bdf8; color:#0b1221; font-weight:700; cursor:pointer; }
+    button.secondary { background:transparent; color:#e2e8f0; border:1px solid #334155; }
+    button:disabled { opacity:0.6; cursor:not-allowed; }
+    h2,h3,h4 { margin:0 0 8px 0; }
+    .grid { display:grid; gap:16px; }
+    .grid.two { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+    .section-header { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .ticket-list { display:flex; flex-direction:column; gap:10px; }
+    .ticket-card { border:1px solid #1f2937; border-radius:12px; padding:12px; background:#0b162a; display:flex; flex-direction:column; gap:8px; }
+    .pill { display:inline-block; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:700; letter-spacing:0.3px; }
+    .pill.epic { background:#f97316; color:#0b1221; }
+    .pill.story { background:#a3e635; color:#0b1221; }
+    .pill.reason { background:#1e293b; color:#cbd5e1; }
+    .row { display:flex; gap:8px; align-items:center; justify-content:space-between; flex-wrap:wrap; }
+    .checkbox { display:flex; gap:8px; align-items:center; }
+    .badge { display:inline-block; padding:4px 8px; border-radius:8px; background:#1f2937; color:#cbd5e1; font-size:12px; }
+    .stack { display:flex; flex-direction:column; gap:6px; }
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,0.55); display:none; align-items:center; justify-content:center; padding:20px; }
+    .modal-content { background:#0f172a; border:1px solid #1f2937; border-radius:14px; padding:16px; max-width:780px; width:100%; max-height:90vh; overflow:auto; box-shadow:0 14px 36px rgba(0,0,0,0.45); }
+    .divider { height:1px; background:#1f2937; margin:8px 0; }
+    .code-block { background:#0b162a; border:1px solid #1f2937; border-radius:10px; padding:10px; font-family: ui-monospace, SFMono-Regular, SFMono; font-size:13px; white-space:pre-wrap; }
+    .inline { display:inline-flex; align-items:center; gap:6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h2 style="margin:0;">Generate Impact Analysis</h2>
+      <div class="muted" id="project-subtitle">Loading...</div>
+    </div>
+    <div class="row">
+      <button class="secondary" onclick="window.location.href='/projects/{{ project_id }}/view'">Back to Project</button>
+      <button onclick="window.location.href='/projects/{{ project_id }}/board'">Open Board</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="conflict-card" class="card" style="display:none; border:1px solid #f87171; background:#2b0f13;">
+      <h3 style="margin-top:0;">Conflicts detected</h3>
+      <p class="muted">Resolve these before applying. Click links to open the referenced items.</p>
+      <div id="conflict-list"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-header">
+        <div>
+          <h3>Requirements change</h3>
+          <p class="muted">Paste the previous and updated specs. We only return tickets impacted by the delta.</p>
+        </div>
+        <button id="run-btn">Generate impact analysis</button>
+      </div>
+      <div class="grid two">
+        <div>
+          <label for="old-spec">Old spec</label>
+          <textarea id="old-spec" placeholder="Previous functional requirements"></textarea>
+          <div class="row" style="margin-top:6px;">
+            <select id="change-select"></select>
+            <button class="secondary" id="load-change">Load change</button>
+          </div>
+          <p class="muted" id="change-hint">Pick a past change or paste manually.</p>
+        </div>
+        <div>
+          <label for="new-spec">New spec</label>
+          <textarea id="new-spec" placeholder="Updated functional requirements"></textarea>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <div class="muted" id="run-status">Waiting to generate.</div>
+        <span class="badge" id="change-summary-badge" style="display:none;"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="section-header">
+        <h3>Results</h3>
+        <button id="apply-btn" disabled>Apply selected changes</button>
+      </div>
+      <div class="grid two">
+        <div>
+          <h4>Existing impacted tickets</h4>
+          <p class="muted" style="margin-top:4px;">Only tickets tied to changed requirements. Edit before applying.</p>
+          <div id="updated-list" class="ticket-list muted">Nothing generated yet.</div>
+        </div>
+        <div>
+          <h4>New tickets</h4>
+          <p class="muted" style="margin-top:4px;">Suggested epics/stories for new scope only.</p>
+          <div id="new-list" class="ticket-list muted">Nothing generated yet.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="evidence-card" style="display:none;">
+      <h4>Tickets used for RAG evidence</h4>
+      <div id="evidence-list" class="stack"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-header">
+        <h3>What to work on next</h3>
+        <button class="secondary" id="focus-btn">Refresh top 5</button>
+      </div>
+      <div id="focus-summary" class="muted">No focus summary yet.</div>
+      <div id="focus-list" class="ticket-list" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-header">
+        <h3>Impact Chat</h3>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <label for="chat-doc-select" class="muted" style="margin:0;">Doc</label>
+          <select id="chat-doc-select" style="width:220px;"></select>
+        </div>
+      </div>
+      <div id="chat-messages" style="max-height:220px; overflow-y:auto; display:flex; flex-direction:column; gap:8px; padding:8px; background:#0b162a; border-radius:8px; border:1px solid #1f2937;"></div>
+      <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+        <input id="chat-input" placeholder="Ask about change impacts..." style="flex:1; padding:10px; border-radius:8px; border:1px solid #1f2937; background:#0b162a; color:#e2e8f0;" />
+        <button id="chat-send">Send</button>
+      </div>
+      <div id="chat-status" class="muted" style="margin-top:6px;"></div>
+    </div>
+  </main>
+
+  <div id="edit-modal" class="modal">
+    <div class="modal-content">
+      <div class="section-header">
+        <h3 id="modal-title">Edit ticket</h3>
+        <button class="secondary" id="modal-close">Close</button>
+      </div>
+      <div class="divider"></div>
+      <div id="modal-body" class="stack"></div>
+      <div class="divider"></div>
+      <div class="stack">
+        <label>Title</label>
+        <input id="modal-edit-title" />
+        <label>Description</label>
+        <textarea id="modal-edit-desc"></textarea>
+        <label>Acceptance Criteria</label>
+        <textarea id="modal-edit-ac" placeholder="One item per line"></textarea>
+        <div class="row" style="margin-top:8px;">
+          <button id="modal-save">Save edits</button>
+          <span class="muted" id="modal-status"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const projectId = "{{ project_id }}";
+    const currentUser = localStorage.getItem('currentUser');
+    if (!currentUser) window.location.href = '/';
+
+    const oldSpecEl = document.getElementById('old-spec');
+    const newSpecEl = document.getElementById('new-spec');
+    const runBtn = document.getElementById('run-btn');
+    const runStatus = document.getElementById('run-status');
+    const applyBtn = document.getElementById('apply-btn');
+    const updatedList = document.getElementById('updated-list');
+    const newList = document.getElementById('new-list');
+    const changeSummaryBadge = document.getElementById('change-summary-badge');
+    const evidenceCard = document.getElementById('evidence-card');
+    const evidenceList = document.getElementById('evidence-list');
+    const changeSelect = document.getElementById('change-select');
+    const loadChangeBtn = document.getElementById('load-change');
+    const changeHint = document.getElementById('change-hint');
+    const focusBtn = document.getElementById('focus-btn');
+    const focusSummary = document.getElementById('focus-summary');
+    const focusList = document.getElementById('focus-list');
+    const conflictCard = document.getElementById('conflict-card');
+    const conflictList = document.getElementById('conflict-list');
+    const chatMessagesEl = document.getElementById('chat-messages');
+    const chatInput = document.getElementById('chat-input');
+    const chatSend = document.getElementById('chat-send');
+    const chatStatus = document.getElementById('chat-status');
+    const chatDocSelect = document.getElementById('chat-doc-select');
+
+    const editModal = document.getElementById('edit-modal');
+    const modalTitle = document.getElementById('modal-title');
+    const modalBody = document.getElementById('modal-body');
+    const modalEditTitle = document.getElementById('modal-edit-title');
+    const modalEditDesc = document.getElementById('modal-edit-desc');
+    const modalEditAc = document.getElementById('modal-edit-ac');
+    const modalSave = document.getElementById('modal-save');
+    const modalClose = document.getElementById('modal-close');
+    const modalStatus = document.getElementById('modal-status');
+
+    let updatedTickets = [];
+    let newTickets = [];
+    let activeEdit = null;
+    let changeHistory = [];
+    let chatHistory = [];
+
+    async function fetchProjectSubtitle() {
+      try {
+        const res = await fetch(`/api/projects/${projectId}`, { headers: { 'X-User': currentUser || '' } });
+        if (!res.ok) return;
+        const data = await res.json();
+        document.getElementById('project-subtitle').textContent = `${data.code} — ${data.title}`;
+        // Prefill new spec with current project description + plan if available
+        const plan = (data.requirements_plan || '').trim();
+        const desc = (data.description || '').trim();
+        const combined = `${desc}${plan ? '\\n\\n' + plan : ''}`.trim();
+        if (!newSpecEl.value && combined) {
+          newSpecEl.value = combined;
+        }
+        const docs = data.documents || [];
+        if (docs.length) {
+          chatDocSelect.innerHTML = `<option value="all">All documents</option>` + docs.map(d => `<option value="${d.id}">${d.original_name || d.filename}</option>`).join('');
+        } else {
+          chatDocSelect.innerHTML = '<option value="all">All (no docs uploaded)</option>';
+        }
+      } catch (err) {
+        document.getElementById('project-subtitle').textContent = 'Project';
+        chatDocSelect.innerHTML = '<option value="all">All (no docs loaded)</option>';
+      }
+    }
+
+    function sanitizeText(text) {
+      return (text || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function renderConflicts(conflicts) {
+      if (!conflicts || !conflicts.length) {
+        conflictCard.style.display = 'none';
+        conflictList.innerHTML = '';
+        return;
+      }
+      const rows = conflicts.map(c => {
+        const f1 = c.file_1 || {};
+        const f2 = c.file_2 || {};
+        const fmt = (f) => `
+          <div style="margin-top:4px;">
+            <strong>${sanitizeText((f.type || '').toUpperCase() || 'ITEM')}</strong> — ${sanitizeText(f.id || f.path || 'unknown')}
+            ${f.section_label ? `<div class="muted">Section: ${sanitizeText(f.section_label)}</div>` : ''}
+            ${f.section_start_marker ? `<div class="muted">Highlight: ${sanitizeText(f.section_start_marker)}${f.section_end_marker ? ' … ' + sanitizeText(f.section_end_marker) : ''}</div>` : ''}
+          </div>
+        `;
+        return `
+          <div style="margin-bottom:12px; padding:8px; border:1px solid #f87171; border-radius:8px;">
+            <div><strong>${sanitizeText(c.description || '')}</strong></div>
+            <div style="margin-top:6px;">Review the following items:</div>
+            ${fmt(f1)}
+            ${fmt(f2)}
+          </div>
+        `;
+      }).join('');
+      conflictList.innerHTML = rows;
+      conflictCard.style.display = 'block';
+    }
+
+    async function loadChangeHistory() {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/impact_changes`, { headers: { 'X-User': currentUser || '' } });
+        if (!res.ok) throw new Error();
+        const data = await res.json();
+        changeHistory = data.entries || [];
+        if (!changeHistory.length) {
+          changeSelect.innerHTML = '<option value="">No history</option>';
+          changeHint.textContent = 'No saved changes yet; paste specs manually.';
+          return;
+        }
+        changeSelect.innerHTML = changeHistory
+          .slice().reverse()
+          .map((entry, idx) => `<option value="${idx}">${entry.type} — ${entry.saved_at}</option>`)
+          .join('');
+        changeHint.textContent = 'History loaded. Select to auto-fill old/new.';
+        // Auto-load the latest change into the form
+        const latest = changeHistory[changeHistory.length - 1];
+        if (latest) {
+          oldSpecEl.value = latest.old || '';
+          newSpecEl.value = latest.new || newSpecEl.value;
+          runStatus.textContent = `Loaded latest change ${latest.type} @ ${latest.saved_at}`;
+        }
+      } catch (err) {
+        changeSelect.innerHTML = '<option value="">Failed to load history</option>';
+        changeHint.textContent = 'Could not load history; paste specs manually.';
+      }
+    }
+
+    function renderLists() {
+      const renderCard = (item, idx, type) => {
+        const pillClass = (item.type || '').toLowerCase() === 'epic' ? 'epic' : 'story';
+        const acPreview = (item.acceptanceCriteria || item.suggested?.acceptanceCriteria || '').split('\\n').filter(Boolean).slice(0,2).join(' • ');
+        const ticketCode = item.key || item.id || '';
+        return `
+          <div class="ticket-card">
+            <div class="row">
+              <div class="inline">
+                <span class="pill ${pillClass}">${(item.type || '').toUpperCase() || 'STORY'}</span>
+                ${ticketCode ? `<span class="badge">${ticketCode}</span>` : ''}
+              </div>
+              <div class="checkbox">
+                <input type="checkbox" data-type="${type}" data-idx="${idx}" ${item.selected ? 'checked' : ''}/>
+                <span class="muted">Include</span>
+              </div>
+            </div>
+            <div class="stack">
+              <div style="font-weight:700;">${sanitizeText(item.title || item.suggested?.title || '')}</div>
+              <div class="muted">${sanitizeText(item.changeReason || '')}</div>
+              ${acPreview ? `<div class="badge">AC: ${sanitizeText(acPreview)}</div>` : ''}
+            </div>
+            <div class="row">
+              <span class="pill reason">Edit / view</span>
+              <button class="secondary" data-edit="${type}" data-idx="${idx}">View / Edit</button>
+            </div>
+          </div>
+        `;
+      };
+
+      updatedList.innerHTML = updatedTickets.length
+        ? updatedTickets.map((t, i) => renderCard(t, i, 'updated')).join('')
+        : '<p class="muted">None yet.</p>';
+      newList.innerHTML = newTickets.length
+        ? newTickets.map((t, i) => renderCard(t, i, 'new')).join('')
+        : '<p class="muted">None yet.</p>';
+
+      updatedList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.addEventListener('change', () => toggleSelect('updated', Number(cb.dataset.idx), cb.checked));
+      });
+      newList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+        cb.addEventListener('change', () => toggleSelect('new', Number(cb.dataset.idx), cb.checked));
+      });
+      [...updatedList.querySelectorAll('button[data-edit]'), ...newList.querySelectorAll('button[data-edit]')].forEach(btn => {
+        btn.addEventListener('click', () => openEditor(btn.dataset.edit, Number(btn.dataset.idx)));
+      });
+      updateApplyState();
+    }
+
+    function toggleSelect(type, idx, value) {
+      if (type === 'updated' && updatedTickets[idx]) updatedTickets[idx].selected = value;
+      if (type === 'new' && newTickets[idx]) newTickets[idx].selected = value;
+      updateApplyState();
+    }
+
+    function updateApplyState() {
+      const anySelected = [...updatedTickets, ...newTickets].some(t => t.selected);
+      applyBtn.disabled = !anySelected;
+    }
+
+    function openEditor(type, idx) {
+      const source = type === 'updated' ? updatedTickets : newTickets;
+      const item = source[idx];
+      if (!item) return;
+      activeEdit = { type, idx };
+      const before = item.before || {};
+      const suggested = item.suggested || item;
+      modalTitle.textContent = type === 'updated' ? `Edit impacted ticket ${item.id || ''}` : 'Edit new ticket';
+      modalBody.innerHTML = `
+        <div class="stack">
+          <div class="badge">Change reason</div>
+          <div class="code-block">${sanitizeText(item.changeReason || '') || 'N/A'}</div>
+          ${item.id ? `<div class="badge">Before</div><div class="code-block">${sanitizeText(before.title || '')}\\n${sanitizeText(before.description || '')}\\nAC: ${sanitizeText(before.acceptanceCriteria || '')}</div>` : ''}
+          <div class="badge">Suggested</div>
+          <div class="code-block">${sanitizeText(suggested.title || '')}\\n${sanitizeText(suggested.description || '')}\\nAC: ${sanitizeText(suggested.acceptanceCriteria || '')}</div>
+        </div>
+      `;
+      modalEditTitle.value = item.title || suggested.title || '';
+      modalEditDesc.value = item.description || suggested.description || '';
+      modalEditAc.value = item.acceptanceCriteria || suggested.acceptanceCriteria || '';
+      modalStatus.textContent = '';
+      editModal.style.display = 'flex';
+    }
+
+    function saveEditor() {
+      if (!activeEdit) return;
+      const source = activeEdit.type === 'updated' ? updatedTickets : newTickets;
+      const item = source[activeEdit.idx];
+      if (!item) return;
+      item.title = modalEditTitle.value;
+      item.description = modalEditDesc.value;
+      item.acceptanceCriteria = modalEditAc.value;
+      modalStatus.textContent = 'Saved locally.';
+      renderLists();
+    }
+
+    function loadSelectedChange() {
+      const idx = parseInt(changeSelect.value, 10);
+      if (Number.isNaN(idx)) return;
+      const entry = changeHistory.slice().reverse()[idx];
+      if (!entry) return;
+      oldSpecEl.value = entry.old || '';
+      newSpecEl.value = entry.new || '';
+      runStatus.textContent = `Loaded change ${entry.type} @ ${entry.saved_at}`;
+    }
+
+    async function runGeneration() {
+      const oldSpec = oldSpecEl.value.trim();
+      const newSpec = newSpecEl.value.trim();
+      if (!newSpec) {
+        runStatus.textContent = 'Please provide the updated spec.';
+        return;
+      }
+      runBtn.disabled = true;
+      runStatus.textContent = 'Generating...';
+      changeSummaryBadge.style.display = 'none';
+      try {
+        const res = await fetch(`/api/projects/${projectId}/impacted_tickets`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User': currentUser || '' },
+          body: JSON.stringify({ oldSpec, newSpec }),
+        });
+        if (!res.ok) throw new Error(`Request failed (${res.status})`);
+        const data = await res.json();
+        const updatedRaw = data.updatedTickets || [];
+        const newRaw = data.newTickets || [];
+        updatedTickets = updatedRaw.map(t => ({
+          ...t,
+          key: t.key || t.id || '',
+          type: (t.type || 'story').toLowerCase(),
+          title: t.suggested?.title || t.title || '',
+          description: t.suggested?.description || t.description || '',
+          acceptanceCriteria: t.suggested?.acceptanceCriteria || t.acceptanceCriteria || '',
+          selected: true,
+        }));
+        newTickets = newRaw.map(t => ({
+          ...t,
+          key: t.key || t.id || '',
+          type: (t.type || 'story').toLowerCase(),
+          title: t.title || '',
+          description: t.description || '',
+          acceptanceCriteria: t.acceptanceCriteria || '',
+          selected: true,
+        }));
+        renderLists();
+        runStatus.textContent = `Generated ${updatedTickets.length} updates and ${newTickets.length} new tickets.`;
+        if (data.changeSummary) {
+          changeSummaryBadge.style.display = 'inline-flex';
+          changeSummaryBadge.textContent = data.changeSummary;
+        }
+        if (data.evidence && data.evidence.length) {
+          evidenceCard.style.display = 'block';
+          evidenceList.innerHTML = data.evidence.map(ev => `
+            <div class="code-block">
+              <div class="inline"><span class="badge">${sanitizeText(ev.ticket_key || '')}</span><span class="muted">${sanitizeText(ev.title || '')}</span></div>
+              <div class="muted">Score: ${ev.score ? ev.score.toFixed(2) : 'n/a'}</div>
+              <div style="margin-top:6px;">${sanitizeText((ev.content || '').slice(0, 400))}</div>
+            </div>
+          `).join('');
+        } else {
+          evidenceCard.style.display = 'none';
+        }
+      } catch (err) {
+        runStatus.textContent = 'Failed to generate impact analysis.';
+        updatedTickets = [];
+        newTickets = [];
+        renderLists();
+      } finally {
+        runBtn.disabled = false;
+      }
+    }
+
+    async function applyChanges() {
+      const payload = {
+        updatedTickets: updatedTickets.filter(t => t.selected).map(t => ({
+          id: t.id,
+          title: t.title,
+          description: t.description,
+          acceptanceCriteria: t.acceptanceCriteria,
+        })),
+        newTickets: newTickets.filter(t => t.selected).map(t => ({
+          type: t.type || 'story',
+          title: t.title,
+          description: t.description,
+          acceptanceCriteria: t.acceptanceCriteria,
+        })),
+      };
+      if (!payload.updatedTickets.length && !payload.newTickets.length) {
+        return;
+      }
+      applyBtn.disabled = true;
+      applyBtn.textContent = 'Applying...';
+      try {
+        const res = await fetch(`/api/projects/${projectId}/impacted_tickets/apply`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User': currentUser || '' },
+          body: JSON.stringify(payload),
+        });
+        if (res.status === 409) {
+          const data = await res.json();
+          renderConflicts(data.conflicts || []);
+          applyBtn.textContent = 'Conflicts detected';
+          applyBtn.disabled = false;
+          return;
+        }
+        if (!res.ok) throw new Error('Apply failed');
+        renderConflicts([]);
+        await res.json();
+        applyBtn.textContent = 'Applied!';
+        runStatus.textContent = 'Changes saved. Refreshing board data is recommended.';
+        setTimeout(() => { applyBtn.textContent = 'Apply selected changes'; applyBtn.disabled = false; }, 1500);
+      } catch (err) {
+        applyBtn.disabled = false;
+        applyBtn.textContent = 'Apply selected changes';
+        runStatus.textContent = 'Failed to apply changes.';
+      }
+    }
+
+async function fetchFocus() {
+  focusBtn.disabled = true;
+  focusSummary.textContent = 'Loading focus suggestions...';
+  try {
+    const res = await fetch(`/api/projects/${projectId}/focus_ai`, { headers: { 'X-User': currentUser || '' } });
+    if (!res.ok) throw new Error();
+    const data = await res.json();
+    focusSummary.textContent = data.summary || 'No summary.';
+        const items = data.top_tickets || [];
+        focusList.innerHTML = items.length
+          ? items.map(t => `
+              <div class="ticket-card">
+                <div class="inline"><span class="pill ${(t.priority || 'MEDIUM').toLowerCase()}">${sanitizeText(t.ticket_key || '')}</span><span class="badge">${sanitizeText(t.status || '')}</span></div>
+                <div style="font-weight:700;">${sanitizeText(t.title || '')}</div>
+                <div class="muted">${sanitizeText(t.focus_reason || '')}</div>
+              </div>
+            `).join('')
+          : '<p class="muted">No focus items.</p>';
+      } catch (err) {
+        focusSummary.textContent = 'Failed to load focus suggestions.';
+        focusList.innerHTML = '';
+  } finally {
+    focusBtn.disabled = false;
+  }
+}
+
+function appendChat(role, content) {
+  const div = document.createElement('div');
+  div.innerHTML = `<strong>${role === 'user' ? 'You' : 'AI'}:</strong> ${content}`;
+  chatMessagesEl.appendChild(div);
+  chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+}
+
+async function sendChat() {
+  const msg = chatInput.value.trim();
+  if (!msg) return;
+  const docId = chatDocSelect.value || 'all';
+  chatHistory.push({ role: 'user', content: msg });
+  appendChat('user', msg);
+  chatInput.value = '';
+  chatStatus.textContent = 'Thinking...';
+  try {
+    const data = await fetch(`/api/projects/${projectId}/impact_chat?doc_id=${encodeURIComponent(docId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-User': currentUser || '' },
+      body: JSON.stringify({ messages: chatHistory }),
+    }).then(r => r.json());
+    const reply = data.reply || 'No answer.';
+    chatHistory.push({ role: 'assistant', content: reply });
+    appendChat('assistant', reply);
+    chatStatus.textContent = '';
+  } catch (err) {
+    chatStatus.textContent = 'Chat failed.';
+  }
+}
+
+  runBtn.addEventListener('click', runGeneration);
+  applyBtn.addEventListener('click', applyChanges);
+  modalClose.addEventListener('click', () => { editModal.style.display = 'none'; });
+  modalSave.addEventListener('click', saveEditor);
+  editModal.addEventListener('click', (e) => { if (e.target === editModal) editModal.style.display = 'none'; });
+  loadChangeBtn.addEventListener('click', loadSelectedChange);
+  focusBtn.addEventListener('click', fetchFocus);
+  chatSend.addEventListener('click', sendChat);
+  chatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendChat(); }});
+
+    function refreshImpactPage() {
+      fetchProjectSubtitle();
+      loadChangeHistory();
+      fetchFocus();
+      renderLists();
+    }
+
+    refreshImpactPage();
+    window.addEventListener('focus', refreshImpactPage);
+  </script>
+</body>
+</html>
