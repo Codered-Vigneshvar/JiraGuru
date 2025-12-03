@@ -186,6 +186,7 @@ Rules:
 - Do NOT omit tickets because of similarity ranking; consider all provided tickets.
 - Do NOT invent unrelated work.
 - Keep changeReason short and specific.
+- Hard cap: newTickets must contain no more than 5 items. If more than 5 are needed, consolidate scope into EPIC entries to stay within 5 total.
 - acceptanceCriteria fields are plain text (later parsed into a list).
 """
 
@@ -205,6 +206,30 @@ def _parse_json_response(raw_text: str) -> Dict[str, Any] | None:
         except json.JSONDecodeError:
             continue
     return None
+
+
+def _enforce_new_ticket_limit(new_tickets: List[Dict[str, Any]], limit: int = 5) -> List[Dict[str, Any]]:
+    """Ensure impact analysis returns at most `limit` new tickets, consolidating to epics if needed."""
+    if not isinstance(new_tickets, list):
+        return []
+    if len(new_tickets) <= limit:
+        return new_tickets
+
+    log_ai_event(
+        f"[ImpactedTickets Cap] limiting new tickets from {len(new_tickets)} to {limit} by consolidating into epics."
+    )
+    note = "Consolidated to EPIC to keep new ticket count within 5."
+    capped: List[Dict[str, Any]] = []
+    for item in new_tickets[:limit]:
+        mapped = dict(item)
+        type_val = str(mapped.get("type", "")).strip().lower()
+        if type_val != "epic":
+            mapped["type"] = "epic"
+            reason = str(mapped.get("changeReason") or mapped.get("reason") or "").strip()
+            mapped["changeReason"] = f"{reason} {note}".strip()
+        capped.append(mapped)
+
+    return capped
 
 
 def _build_context(state: ImpactTicketsState) -> ImpactTicketsState:
@@ -349,6 +374,8 @@ def generate_impacted_tickets(project_id: str, old_spec: str, new_spec: str) -> 
     new_tickets = payload.get("newTickets") or []
     if not isinstance(updated_tickets, list) or not isinstance(new_tickets, list):
         raise HTTPException(status_code=502, detail="AI response missing required fields.")
+
+    new_tickets = _enforce_new_ticket_limit(new_tickets)
 
     return ImpactedTicketResult(
         updatedTickets=updated_tickets,
